@@ -1,0 +1,49 @@
+# Trivy configuration file
+# See: https://aquasecurity.github.io/trivy/latest/docs/configuration/
+
+# Scan settings
+severity:
+  - CRITICAL
+  - HIGH
+  - MEDIUM
+
+# Vulnerability database settings
+db:
+  # Skip database update (use for CI optimization)
+  skip-update: false
+  
+# Skip certain checks
+skip-checks:
+  # Skip these vulnerability IDs if needed
+  # - CVE-2022-12345
+
+# File patterns to ignore
+ignorepaths:
+  - "**/*test*"
+  - "**/*Test*"
+  - "**/node_modules/**"
+  - "**/vendor/**"
+  - "**/.git/**"
+  - "**/dist/**"
+  - "**/build/**"
+
+# Secret scanning
+secret:
+  # Additional secret patterns
+  config: |
+    rules:
+      - id: custom-api-key
+        regex: "api[_-]?key[\\s]*[=:][\\s]*['\"]?([a-zA-Z0-9]{32,})['\"]?"
+        path: "**/*"
+
+# Misconfiguration scanning
+misconfig:
+  # Include checks for these frameworks
+  include-non-failures: false
+  
+# License scanning (if needed)
+license:
+  # Forbidden licenses
+  forbidden:
+    - GPL-3.0
+    - AGPL-3.0

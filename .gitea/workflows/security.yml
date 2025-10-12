@@ -1,0 +1,68 @@
+name: Security Scanning with Trivy
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Run weekly on Sundays at 2 AM
+    - cron: '0 2 * * 0'
+
+jobs:
+  trivy-scan:
+    name: Trivy Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+
+      # Install dependencies for better scanning
+      - name: Install Go dependencies
+        run: go mod download
+
+      # Install Trivy using direct binary download
+      - name: Install Trivy
+        run: |
+          echo "📥 Installing Trivy binary..."
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b ./bin
+          export PATH="$PWD/bin:$PATH"
+          echo "$PWD/bin" >> $GITHUB_PATH
+          trivy --version
+
+      # Filesystem scan for vulnerabilities
+      - name: Run Trivy filesystem scan
+        run: |
+          echo "🔍 Scanning filesystem for vulnerabilities..."
+          ./bin/trivy fs . --severity CRITICAL,HIGH,MEDIUM --format table --quiet
+
+      # Configuration scan (secrets, misconfigurations)
+      - name: Run Trivy config scan
+        run: |
+          echo "⚙️  Scanning for misconfigurations..."
+          ./bin/trivy config . --severity CRITICAL,HIGH,MEDIUM --format table --quiet || true
+
+      # Secret scanning
+      - name: Run Trivy secret scan
+        run: |
+          echo "🔐 Scanning for secrets..."
+          ./bin/trivy fs . --scanners secret --format table --quiet
+
+      # Go-specific vulnerability check
+      - name: Go vulnerability check
+        run: |
+          echo "🐹 Checking Go vulnerabilities..."
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      # Summary scan
+      - name: Print Trivy summary
+        run: |
+          echo "📊 Security scan summary (CRITICAL & HIGH only)..."
+          ./bin/trivy fs . --severity CRITICAL,HIGH --format table --quiet

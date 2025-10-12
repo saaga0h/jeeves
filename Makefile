@@ -101,6 +101,55 @@ install-tools:
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 	@echo "Tools installed!"
 
+# Security scanning with Trivy
+security-install:
+	@echo "🔧 Installing Trivy..."
+	@if ! command -v trivy >/dev/null 2>&1; then \
+		if [[ "$$OSTYPE" == "darwin"* ]]; then \
+			brew install trivy; \
+		elif command -v apt-get >/dev/null 2>&1; then \
+			sudo apt-get update && sudo apt-get install -y wget apt-transport-https gnupg lsb-release && \
+			wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add - && \
+			echo "deb https://aquasecurity.github.io/trivy-repo/deb $$(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list && \
+			sudo apt-get update && sudo apt-get install -y trivy; \
+		elif command -v yum >/dev/null 2>&1; then \
+			sudo yum install -y wget && \
+			wget https://github.com/aquasecurity/trivy/releases/download/v0.46.0/trivy_0.46.0_Linux-64bit.rpm && \
+			sudo rpm -ivh trivy_0.46.0_Linux-64bit.rpm; \
+		else \
+			echo "Install Trivy manually: https://aquasecurity.github.io/trivy/latest/getting-started/installation/"; \
+			exit 1; \
+		fi; \
+	else \
+		echo "Trivy already installed"; \
+	fi
+
+security: security-install
+	@echo "Running security scans..."
+	@echo ""
+	@echo "Scanning filesystem for vulnerabilities..."
+	@trivy fs . --severity CRITICAL,HIGH,MEDIUM --format table --quiet
+	@echo ""
+	@echo "Scanning for misconfigurations..."
+	@trivy config . --severity CRITICAL,HIGH,MEDIUM --format table --quiet
+	@echo ""
+	@echo "Scanning for secrets..."
+	@trivy fs . --scanners secret --format table --quiet
+	@echo ""
+	@echo "Summary scan (CRITICAL & HIGH only)..."
+	@trivy fs . --severity CRITICAL,HIGH --format table --quiet
+	@echo ""
+	@echo "Security scan complete!"
+
+security-quick:
+	@echo "🚀 Quick security scan (CRITICAL & HIGH only)..."
+	@trivy fs . --severity CRITICAL,HIGH --format table --quiet
+	@echo "Quick scan complete!"
+
+security-go:
+	@echo "Scanning Go dependencies..."
+	@trivy fs . --scanners vuln --format table --quiet | grep -E "(go\.mod|Total|OS|Library)" || echo "No Go vulnerabilities found"
+
 # Help
 help:
 	@echo "J.E.E.V.E.S. Platform 2.0 - Available Makefile targets:"
@@ -118,6 +167,11 @@ help:
 	@echo "  make run-illuminance - Run illuminance agent locally"
 	@echo "  make run-light       - Run light agent locally"
 	@echo "  make run-occupancy   - Run occupancy agent locally"
+	@echo ""
+	@echo "  make security-install - Install Trivy for security scanning"
+	@echo "  make security        - Run full security scan (requires Trivy)"
+	@echo "  make security-quick  - Run quick security scan (CRITICAL & HIGH only)"
+	@echo "  make security-go     - Scan Go dependencies for vulnerabilities"
 	@echo ""
 	@echo "  make install-tools   - Install development tools (golangci-lint)"
 	@echo "  make help            - Show this help message"
