@@ -27,3 +27,6 @@ go.work.sum
 
 # build binaries
 bin/*
+
+# DS_Store
+.DS_Store
