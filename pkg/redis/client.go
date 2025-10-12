@@ -171,6 +171,15 @@ func (r *redisClient) LLen(ctx context.Context, key string) (int64, error) {
 	return length, nil
 }
 
+// LRange returns a range of elements from a list
+func (r *redisClient) LRange(ctx context.Context, key string, start, stop int64) ([]string, error) {
+	values, err := r.client.LRange(ctx, key, start, stop).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get range from list %s: %w", key, err)
+	}
+	return values, nil
+}
+
 // Expire sets a TTL on a key
 func (r *redisClient) Expire(ctx context.Context, key string, ttl time.Duration) error {
 	err := r.client.Expire(ctx, key, ttl).Err()

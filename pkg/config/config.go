@@ -46,6 +46,12 @@ type Config struct {
 	ManualOverrideMinutes int
 	MinDecisionIntervalMs int
 	APIPort               int
+
+	// Occupancy agent configuration
+	OccupancyAnalysisIntervalSec int
+	LLMEndpoint                  string
+	LLMModel                     string
+	MaxEventHistory              int
 }
 
 // NewConfig creates a new Config with default values
@@ -78,6 +84,11 @@ func NewConfig() *Config {
 		ManualOverrideMinutes: 30,
 		MinDecisionIntervalMs: 10000,
 		APIPort:               3002,
+		// Occupancy agent defaults
+		OccupancyAnalysisIntervalSec: 30,
+		LLMEndpoint:                  "http://localhost:11434/api/generate",
+		LLMModel:                     "llama3.2:3b",
+		MaxEventHistory:              100,
 	}
 }
 
@@ -196,6 +207,24 @@ func (c *Config) LoadFromEnv() {
 			c.APIPort = port
 		}
 	}
+
+	// Occupancy agent configuration
+	if v := os.Getenv("JEEVES_OCCUPANCY_ANALYSIS_INTERVAL_SEC"); v != "" {
+		if interval, err := strconv.Atoi(v); err == nil {
+			c.OccupancyAnalysisIntervalSec = interval
+		}
+	}
+	if v := os.Getenv("JEEVES_LLM_ENDPOINT"); v != "" {
+		c.LLMEndpoint = v
+	}
+	if v := os.Getenv("JEEVES_LLM_MODEL"); v != "" {
+		c.LLMModel = v
+	}
+	if v := os.Getenv("JEEVES_MAX_EVENT_HISTORY"); v != "" {
+		if max, err := strconv.Atoi(v); err == nil {
+			c.MaxEventHistory = max
+		}
+	}
 }
 
 // LoadFromFlags parses command-line flags and overrides config values
@@ -235,6 +264,12 @@ func (c *Config) LoadFromFlags() {
 	pflag.IntVar(&c.ManualOverrideMinutes, "manual-override-minutes", c.ManualOverrideMinutes, "Manual override duration in minutes")
 	pflag.IntVar(&c.MinDecisionIntervalMs, "min-decision-interval-ms", c.MinDecisionIntervalMs, "Minimum time between decisions per location (ms)")
 	pflag.IntVar(&c.APIPort, "api-port", c.APIPort, "HTTP API port")
+
+	// Occupancy agent flags
+	pflag.IntVar(&c.OccupancyAnalysisIntervalSec, "occupancy-analysis-interval", c.OccupancyAnalysisIntervalSec, "Occupancy analysis interval in seconds")
+	pflag.StringVar(&c.LLMEndpoint, "llm-endpoint", c.LLMEndpoint, "LLM API endpoint URL")
+	pflag.StringVar(&c.LLMModel, "llm-model", c.LLMModel, "LLM model name")
+	pflag.IntVar(&c.MaxEventHistory, "max-event-history", c.MaxEventHistory, "Maximum motion event history to keep")
 
 	pflag.Parse()
 }

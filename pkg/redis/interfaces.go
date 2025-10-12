@@ -52,6 +52,9 @@ type Client interface {
 	// LLen returns the length of a list
 	LLen(ctx context.Context, key string) (int64, error)
 
+	// LRange returns a range of elements from a list
+	LRange(ctx context.Context, key string, start, stop int64) ([]string, error)
+
 	// Expire sets a TTL on a key
 	Expire(ctx context.Context, key string, ttl time.Duration) error
 
