@@ -40,6 +40,12 @@ type Config struct {
 	AnalysisIntervalSec int
 	MaxDataAgeHours     float64
 	MinReadingsRequired int
+
+	// Light agent configuration
+	DecisionIntervalSec   int
+	ManualOverrideMinutes int
+	MinDecisionIntervalMs int
+	APIPort               int
 }
 
 // NewConfig creates a new Config with default values
@@ -67,6 +73,11 @@ func NewConfig() *Config {
 		AnalysisIntervalSec: 30,
 		MaxDataAgeHours:     1.0,
 		MinReadingsRequired: 3,
+		// Light agent defaults
+		DecisionIntervalSec:   30,
+		ManualOverrideMinutes: 30,
+		MinDecisionIntervalMs: 10000,
+		APIPort:               3002,
 	}
 }
 
@@ -163,6 +174,28 @@ func (c *Config) LoadFromEnv() {
 			c.MinReadingsRequired = minReadings
 		}
 	}
+
+	// Light agent configuration
+	if v := os.Getenv("JEEVES_DECISION_INTERVAL_SEC"); v != "" {
+		if interval, err := strconv.Atoi(v); err == nil {
+			c.DecisionIntervalSec = interval
+		}
+	}
+	if v := os.Getenv("JEEVES_MANUAL_OVERRIDE_MINUTES"); v != "" {
+		if minutes, err := strconv.Atoi(v); err == nil {
+			c.ManualOverrideMinutes = minutes
+		}
+	}
+	if v := os.Getenv("JEEVES_MIN_DECISION_INTERVAL_MS"); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil {
+			c.MinDecisionIntervalMs = ms
+		}
+	}
+	if v := os.Getenv("JEEVES_API_PORT"); v != "" {
+		if port, err := strconv.Atoi(v); err == nil {
+			c.APIPort = port
+		}
+	}
 }
 
 // LoadFromFlags parses command-line flags and overrides config values
@@ -196,6 +229,12 @@ func (c *Config) LoadFromFlags() {
 	pflag.IntVar(&c.AnalysisIntervalSec, "analysis-interval", c.AnalysisIntervalSec, "Analysis interval in seconds")
 	pflag.Float64Var(&c.MaxDataAgeHours, "max-data-age-hours", c.MaxDataAgeHours, "Maximum age of data to consider (hours)")
 	pflag.IntVar(&c.MinReadingsRequired, "min-readings-required", c.MinReadingsRequired, "Minimum readings required for sufficient data")
+
+	// Light agent flags
+	pflag.IntVar(&c.DecisionIntervalSec, "decision-interval", c.DecisionIntervalSec, "Decision loop interval in seconds")
+	pflag.IntVar(&c.ManualOverrideMinutes, "manual-override-minutes", c.ManualOverrideMinutes, "Manual override duration in minutes")
+	pflag.IntVar(&c.MinDecisionIntervalMs, "min-decision-interval-ms", c.MinDecisionIntervalMs, "Minimum time between decisions per location (ms)")
+	pflag.IntVar(&c.APIPort, "api-port", c.APIPort, "HTTP API port")
 
 	pflag.Parse()
 }

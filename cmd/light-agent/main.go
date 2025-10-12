@@ -14,6 +14,7 @@ import (
 	"github.com/saaga0h/jeeves-platform/pkg/config"
 	"github.com/saaga0h/jeeves-platform/pkg/health"
 	"github.com/saaga0h/jeeves-platform/pkg/mqtt"
+	"github.com/saaga0h/jeeves-platform/pkg/redis"
 )
 
 func main() {
@@ -40,6 +41,8 @@ func main() {
 		"version", "2.0",
 		"service_name", cfg.ServiceName,
 		"mqtt_broker", cfg.MQTTAddress(),
+		"redis_host", cfg.RedisAddress(),
+		"decision_interval_sec", cfg.DecisionIntervalSec,
 		"log_level", cfg.LogLevel)
 
 	// Set up context with cancellation for graceful shutdown
@@ -53,11 +56,14 @@ func main() {
 	// Initialize MQTT client
 	mqttClient := mqtt.NewClient(cfg, logger)
 
-	// Create light agent (note: light agent doesn't need Redis)
-	agent := light.NewAgent(mqttClient, cfg, logger)
+	// Initialize Redis client
+	redisClient := redis.NewClient(cfg, logger)
 
-	// Start health check server (without Redis)
-	healthChecker := health.NewChecker(mqttClient, nil, logger)
+	// Create light agent
+	agent := light.NewAgent(mqttClient, redisClient, cfg, logger)
+
+	// Start health check server
+	healthChecker := health.NewChecker(mqttClient, redisClient, logger)
 	httpServer := startHealthServer(cfg.HealthPort, healthChecker, logger)
 
 	// Start agent in a goroutine
