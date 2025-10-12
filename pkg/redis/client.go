@@ -115,6 +115,35 @@ func (r *redisClient) ZCard(ctx context.Context, key string) (int64, error) {
 	return count, nil
 }
 
+// ZRangeByScoreWithScores returns members in a sorted set within a score range with their scores
+func (r *redisClient) ZRangeByScoreWithScores(ctx context.Context, key string, min, max float64) ([]ZMember, error) {
+	results, err := r.client.ZRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
+		Min: fmt.Sprintf("%f", min),
+		Max: fmt.Sprintf("%f", max),
+	}).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sorted set %s: %w", key, err)
+	}
+
+	members := make([]ZMember, len(results))
+	for i, z := range results {
+		members[i] = ZMember{
+			Score:  z.Score,
+			Member: z.Member.(string),
+		}
+	}
+	return members, nil
+}
+
+// Keys returns all keys matching a pattern
+func (r *redisClient) Keys(ctx context.Context, pattern string) ([]string, error) {
+	keys, err := r.client.Keys(ctx, pattern).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get keys for pattern %s: %w", pattern, err)
+	}
+	return keys, nil
+}
+
 // LPush pushes values to the head of a list
 func (r *redisClient) LPush(ctx context.Context, key string, values ...interface{}) error {
 	err := r.client.LPush(ctx, key, values...).Err()

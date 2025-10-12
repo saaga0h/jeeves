@@ -5,6 +5,12 @@ import (
 	"time"
 )
 
+// ZMember represents a sorted set member with its score
+type ZMember struct {
+	Score  float64
+	Member string
+}
+
 // Client represents a Redis client interface for testing and abstraction
 type Client interface {
 	// Set sets a key to a value with an optional TTL
@@ -30,6 +36,12 @@ type Client interface {
 
 	// ZCard returns the number of members in a sorted set
 	ZCard(ctx context.Context, key string) (int64, error)
+
+	// ZRangeByScoreWithScores returns members in a sorted set within a score range with their scores
+	ZRangeByScoreWithScores(ctx context.Context, key string, min, max float64) ([]ZMember, error)
+
+	// Keys returns all keys matching a pattern
+	Keys(ctx context.Context, pattern string) ([]string, error)
 
 	// LPush pushes values to the head of a list
 	LPush(ctx context.Context, key string, values ...interface{}) error

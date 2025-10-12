@@ -33,6 +33,13 @@ type Config struct {
 	MaxSensorHistory  int
 	EnableVictoriaMetrics bool
 	VictoriaMetricsURL    string
+
+	// Illuminance agent configuration
+	Latitude            float64
+	Longitude           float64
+	AnalysisIntervalSec int
+	MaxDataAgeHours     float64
+	MinReadingsRequired int
 }
 
 // NewConfig creates a new Config with default values
@@ -54,6 +61,12 @@ func NewConfig() *Config {
 		MaxSensorHistory: 1000,
 		EnableVictoriaMetrics: false,
 		VictoriaMetricsURL: "",
+		// Illuminance agent defaults (Helsinki coordinates)
+		Latitude:            60.1695,
+		Longitude:           24.9354,
+		AnalysisIntervalSec: 30,
+		MaxDataAgeHours:     1.0,
+		MinReadingsRequired: 3,
 	}
 }
 
@@ -123,6 +136,33 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("JEEVES_VICTORIA_METRICS_URL"); v != "" {
 		c.VictoriaMetricsURL = v
 	}
+
+	// Illuminance agent configuration
+	if v := os.Getenv("JEEVES_LATITUDE"); v != "" {
+		if lat, err := strconv.ParseFloat(v, 64); err == nil {
+			c.Latitude = lat
+		}
+	}
+	if v := os.Getenv("JEEVES_LONGITUDE"); v != "" {
+		if lon, err := strconv.ParseFloat(v, 64); err == nil {
+			c.Longitude = lon
+		}
+	}
+	if v := os.Getenv("JEEVES_ANALYSIS_INTERVAL_SEC"); v != "" {
+		if interval, err := strconv.Atoi(v); err == nil {
+			c.AnalysisIntervalSec = interval
+		}
+	}
+	if v := os.Getenv("JEEVES_MAX_DATA_AGE_HOURS"); v != "" {
+		if hours, err := strconv.ParseFloat(v, 64); err == nil {
+			c.MaxDataAgeHours = hours
+		}
+	}
+	if v := os.Getenv("JEEVES_MIN_READINGS_REQUIRED"); v != "" {
+		if minReadings, err := strconv.Atoi(v); err == nil {
+			c.MinReadingsRequired = minReadings
+		}
+	}
 }
 
 // LoadFromFlags parses command-line flags and overrides config values
@@ -149,6 +189,13 @@ func (c *Config) LoadFromFlags() {
 	pflag.IntVar(&c.MaxSensorHistory, "max-sensor-history", c.MaxSensorHistory, "Maximum sensor history entries")
 	pflag.BoolVar(&c.EnableVictoriaMetrics, "enable-victoria-metrics", c.EnableVictoriaMetrics, "Enable VictoriaMetrics forwarding")
 	pflag.StringVar(&c.VictoriaMetricsURL, "victoria-metrics-url", c.VictoriaMetricsURL, "VictoriaMetrics URL")
+
+	// Illuminance agent flags
+	pflag.Float64Var(&c.Latitude, "latitude", c.Latitude, "Geographic latitude for daylight calculation")
+	pflag.Float64Var(&c.Longitude, "longitude", c.Longitude, "Geographic longitude for daylight calculation")
+	pflag.IntVar(&c.AnalysisIntervalSec, "analysis-interval", c.AnalysisIntervalSec, "Analysis interval in seconds")
+	pflag.Float64Var(&c.MaxDataAgeHours, "max-data-age-hours", c.MaxDataAgeHours, "Maximum age of data to consider (hours)")
+	pflag.IntVar(&c.MinReadingsRequired, "min-readings-required", c.MinReadingsRequired, "Minimum readings required for sufficient data")
 
 	pflag.Parse()
 }

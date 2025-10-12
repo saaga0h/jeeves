@@ -42,6 +42,9 @@ func main() {
 		"service_name", cfg.ServiceName,
 		"mqtt_broker", cfg.MQTTAddress(),
 		"redis_host", cfg.RedisAddress(),
+		"latitude", cfg.Latitude,
+		"longitude", cfg.Longitude,
+		"analysis_interval_sec", cfg.AnalysisIntervalSec,
 		"log_level", cfg.LogLevel)
 
 	// Set up context with cancellation for graceful shutdown
