@@ -234,6 +234,8 @@ Docker support is planned but not yet implemented.
 
 ### Testing
 
+### Unit Tests
+
 ```bash
 # Run all tests
 make test
@@ -247,6 +249,31 @@ make lint
 # Format code
 make fmt
 ```
+
+### E2E Testing
+
+A comprehensive end-to-end testing framework is available for testing complete system behavior:
+
+```bash
+# Run a single scenario
+cd e2e
+make test SCENARIO=hallway_passthrough
+
+# Run all scenarios
+make test-all
+
+# List available scenarios
+make list
+```
+
+The E2E framework provides:
+- **Scenario-driven testing**: Define user stories in YAML
+- **Complete observability**: Capture all MQTT traffic
+- **Flexible validation**: Support for exact matches, comparisons, and regex
+- **Human-readable reports**: Timeline-based test output
+- **Self-contained**: Docker Compose orchestrates all services
+
+See [e2e/README.md](e2e/README.md) for complete documentation and [e2e/QUICKSTART.md](e2e/QUICKSTART.md) for getting started.
 
 ### Adding a New Agent
 

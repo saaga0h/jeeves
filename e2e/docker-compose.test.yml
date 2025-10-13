@@ -1,0 +1,152 @@
+services:
+  # Infrastructure
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: jeeves-test-mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck", "-W", "3"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: jeeves-test-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Agents
+  collector:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: collector
+    container_name: jeeves-test-collector
+    environment:
+      - JEEVES_MQTT_BROKER=mosquitto
+      - JEEVES_MQTT_PORT=1883
+      - JEEVES_REDIS_HOST=redis
+      - JEEVES_REDIS_PORT=6379
+      - JEEVES_LOG_LEVEL=debug
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  illuminance-agent:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: illuminance-agent
+    container_name: jeeves-test-illuminance
+    environment:
+      - JEEVES_MQTT_BROKER=mosquitto
+      - JEEVES_MQTT_PORT=1883
+      - JEEVES_REDIS_HOST=redis
+      - JEEVES_REDIS_PORT=6379
+      - JEEVES_LOG_LEVEL=debug
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  light-agent:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: light-agent
+    container_name: jeeves-test-light
+    environment:
+      - JEEVES_MQTT_BROKER=mosquitto
+      - JEEVES_MQTT_PORT=1883
+      - JEEVES_REDIS_HOST=redis
+      - JEEVES_REDIS_PORT=6379
+      - JEEVES_LOG_LEVEL=debug
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  occupancy-agent:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: occupancy-agent
+    container_name: jeeves-test-occupancy
+    environment:
+      - JEEVES_MQTT_BROKER=mosquitto
+      - JEEVES_MQTT_PORT=1883
+      - JEEVES_REDIS_HOST=redis
+      - JEEVES_REDIS_PORT=6379
+      - JEEVES_LOG_LEVEL=debug
+      - JEEVES_OCCUPANCY_ANALYSIS_INTERVAL_SEC=60
+      - JEEVES_LLM_ENDPOINT=http://host.docker.internal:11434/api/generate
+      - JEEVES_LLM_MODEL=mixtral:8x7b
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Testing infrastructure
+  observer:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile.observer
+    container_name: jeeves-test-observer
+    environment:
+      - MQTT_BROKER=tcp://mosquitto:1883
+    volumes:
+      - ./test-output:/app/output
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    command: ["--mqtt-broker", "tcp://mosquitto:1883", "--output-dir", "/app/output"]
+
+  test-runner:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile.test-runner
+    container_name: jeeves-test-runner
+    environment:
+      - MQTT_BROKER=tcp://mosquitto:1883
+      - REDIS_HOST=redis:6379
+    volumes:
+      - ../test-scenarios:/scenarios:ro
+      - ./test-output:/output
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      collector:
+        condition: service_started
+      illuminance-agent:
+        condition: service_started
+      light-agent:
+        condition: service_started
+      occupancy-agent:
+        condition: service_started
+    profiles:
+      - test
+
+volumes:
+  test-output:

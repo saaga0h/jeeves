@@ -1,0 +1,25 @@
+FROM golang:1.23-alpine AS builder
+
+WORKDIR /build
+
+# Copy go mod files
+COPY go.mod go.sum ./
+# Allow Go to auto-download newer toolchain if needed
+ENV GOTOOLCHAIN=auto
+RUN go mod download
+
+# Copy source code
+COPY e2e/ ./e2e/
+
+# Build observer
+RUN go build -o observer ./e2e/cmd/observer
+
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates
+
+WORKDIR /app
+
+COPY --from=builder /build/observer .
+
+ENTRYPOINT ["./observer"]

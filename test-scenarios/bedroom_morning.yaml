@@ -1,0 +1,43 @@
+name: "Bedroom Morning Routine"
+description: "Person wakes up, moves around, then leaves"
+
+setup:
+  location: "bedroom"
+  initial_state:
+    occupancy: null
+
+events:
+  - time: 0
+    sensor: "motion:bedroom"
+    value: true
+    description: "Person wakes up"
+
+  - time: 120
+    sensor: "motion:bedroom"
+    value: true
+    description: "Getting dressed"
+
+  - time: 240
+    sensor: "motion:bedroom"
+    value: true
+    description: "Leaving room"
+
+wait:
+  - time: 600
+    description: "Person has left bedroom"
+
+expectations:
+  occupancy_decision:
+    - time: 180
+      topic: "automation/context/occupancy/bedroom"
+      payload:
+        location: "bedroom"
+        occupied: true
+        confidence: ">0.7"
+
+    - time: 600
+      topic: "automation/context/occupancy/bedroom"
+      payload:
+        location: "bedroom"
+        occupied: false
+        confidence: ">0.7"

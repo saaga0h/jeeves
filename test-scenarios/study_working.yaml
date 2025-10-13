@@ -1,0 +1,44 @@
+name: "Study - Person Working"
+description: "Multiple motions, then settling in to work"
+
+setup:
+  location: "study"
+  initial_state:
+    occupancy: null
+
+events:
+  - time: 0
+    sensor: "motion:study"
+    value: true
+    description: "Enter room"
+
+  - time: 30
+    sensor: "motion:study"
+    value: true
+    description: "Moving around"
+
+  - time: 60
+    sensor: "motion:study"
+    value: true
+    description: "Sitting down at desk"
+
+wait:
+  - time: 480
+    description: "Working quietly at desk"
+
+expectations:
+  occupancy_decision:
+    - time: 90
+      topic: "automation/context/occupancy/study"
+      payload:
+        location: "study"
+        occupied: true
+        confidence: ">0.7"
+        reasoning: "~settling.*in|multiple.*motion~"
+
+    - time: 480
+      topic: "automation/context/occupancy/study"
+      payload:
+        location: "study"
+        occupied: true
+        confidence: ">0.6"

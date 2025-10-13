@@ -1,0 +1,38 @@
+name: "Hallway Pass-Through"
+description: "Single motion event, person walks through, doesn't linger"
+
+setup:
+  location: "hallway"
+  initial_state:
+    occupancy: null
+
+events:
+  - time: 0
+    sensor: "motion:hallway"
+    value: true
+    description: "Person enters hallway"
+
+wait:
+  - time: 120
+    description: "No further motion detected"
+
+expectations:
+  collector:
+    - time: 1
+      topic: "automation/sensor/motion/hallway"
+      payload:
+        data:
+          sensorType: "motion"
+          location: "hallway"
+          value: true
+
+  occupancy_decision:
+    - time: 180
+      topic: "automation/context/occupancy/hallway"
+      payload:
+        location: "hallway"
+        state: "empty"
+        data:
+          occupied: false
+          confidence: ">0.7"
+          reasoning: "~pass.*through|single.*motion~"
