@@ -8,6 +8,7 @@ Complete reference for all agents in the J.E.E.V.E.S. platform.
 - [Occupancy Agent](#occupancy-agent)
 - [Illuminance Agent](#illuminance-agent)
 - [Light Agent](#light-agent)
+- [Behavior Agent](#behavior-agent)
 - [Agent Comparison](#agent-comparison)
 
 ---
@@ -35,16 +36,24 @@ graph TB
         LIGHT[Light Agent<br/>Decision & Control]
     end
 
+    subgraph "Behavioral Learning"
+        BEH[Behavior Agent<br/>Episode Tracking]
+    end
+
     COLL -->|triggers| OCC
     COLL -->|triggers| ILL
     OCC -->|context| LIGHT
+    OCC -->|context| BEH
     ILL -->|context| LIGHT
+    LIGHT -->|context| BEH
 
     REDIS[(Redis<br/>Shared State)]
+    POSTGRES[(Postgres<br/>Episodes)]
     COLL -.->|stores| REDIS
     OCC -.->|reads| REDIS
     ILL -.->|reads| REDIS
     LIGHT -.->|reads| REDIS
+    BEH -.->|stores| POSTGRES
 ```
 
 ---
@@ -1015,20 +1024,264 @@ JEEVES_API_PORT=3002                   # HTTP API for manual control
 
 ---
 
+## Behavior Agent
+
+**Status**: 🚧 Initial Implementation (Stub)
+**Purpose**: Track behavioral episodes - periods of activity in specific locations - for future pattern learning
+**Code Location**: [`internal/behavior/`](../internal/behavior/)
+**Lines of Code**: ~210 LOC
+
+### Responsibilities
+
+1. **Monitor** context events (occupancy, lighting, media)
+2. **Detect** episode boundaries (start/end of activities)
+3. **Create** semantic episode records using JSON-LD ontology
+4. **Store** episodes in Postgres with timestamps and metadata
+5. **Publish** episode lifecycle events (started, closed)
+
+### Key Types
+
+```go
+// Agent tracks behavioral episodes
+type Agent struct {
+    mqtt   mqtt.Client
+    redis  redis.Client
+    db     *sql.DB
+    cfg    *config.Config
+    logger *slog.Logger
+
+    activeEpisodes     map[string]string // location → episode ID
+    lastOccupancyState map[string]string // location → "occupied" | "empty"
+    stateMux           sync.RWMutex
+}
+
+// BehavioralEpisode is stored as JSON-LD in Postgres
+type BehavioralEpisode struct {
+    Context    map[string]interface{} `json:"@context"`
+    Type       string                 `json:"@type"`
+    ID         string                 `json:"@id"`
+    StartedAt  time.Time              `json:"jeeves:startedAt"`
+    EndedAt    *time.Time             `json:"jeeves:endedAt,omitempty"`
+    DayOfWeek  string                 `json:"jeeves:dayOfWeek"`
+    TimeOfDay  string                 `json:"jeeves:timeOfDay"`
+    Duration   string                 `json:"jeeves:duration,omitempty"`
+    Activity   Activity               `json:"adl:activity"`
+    EnvContext EnvironmentalContext   `json:"jeeves:hadEnvironmentalContext"`
+}
+```
+
+### MQTT Topics
+
+| Direction | Topic Pattern | Purpose | Example |
+|-----------|---------------|---------|---------|
+| **Subscribe** | `automation/context/occupancy/+` | Occupancy state changes | `automation/context/occupancy/living_room` |
+| **Subscribe** | `automation/context/lighting/+` | Lighting state changes | `automation/context/lighting/living_room` |
+| **Subscribe** | `automation/media/+/+` | Media playback events | `automation/media/playing/living_room` |
+| **Publish** | `automation/behavior/episode/started` | Episode started | Episode beginning detected |
+| **Publish** | `automation/behavior/episode/closed` | Episode ended | Episode closed with reason |
+
+### Postgres Schema
+
+#### behavioral_episodes Table
+
+```sql
+CREATE TABLE behavioral_episodes (
+    id SERIAL PRIMARY KEY,
+    jsonld JSONB NOT NULL,
+    location TEXT GENERATED ALWAYS AS (jsonld->'adl:activity'->'adl:location'->>'name') STORED,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_episodes_location ON behavioral_episodes(location);
+CREATE INDEX idx_episodes_jsonld ON behavioral_episodes USING gin(jsonld);
+```
+
+**Key Fields in JSONLD**:
+- `@context`: JSON-LD context with ontology namespaces (SAREF, ADL, SOSA)
+- `jeeves:startedAt`: Episode start timestamp (RFC3339)
+- `jeeves:endedAt`: Episode end timestamp (RFC3339, nullable)
+- `jeeves:dayOfWeek`: Day of week (Monday, Tuesday, etc.)
+- `jeeves:timeOfDay`: Time segment (morning, afternoon, evening, night)
+- `adl:activity`: Activity description with location
+- `jeeves:hadEnvironmentalContext`: Environmental sensors/state during episode
+
+### Episode Lifecycle
+
+**Episode Start Triggers**:
+- Occupancy transitions from `empty` → `occupied`
+
+**Episode End Triggers**:
+- Occupancy transitions from `occupied` → `empty` (reason: `occupancy_empty`)
+
+**Current State Machine** (Stub):
+```
+[No Episode] --occupied--> [Active Episode] --empty--> [Closed Episode]
+```
+
+**Future Enhancements** (Not Yet Implemented):
+- Track lighting adjustments during episodes
+- Track media activity during episodes
+- Infer activity types from patterns (watching TV, working, sleeping)
+- Use episode history to predict preferences
+
+### Example Message Flow
+
+```
+1. Occupancy detected:
+   Topic: automation/context/occupancy/living_room
+   Payload: {
+     "location": "living_room",
+     "state": "occupied",
+     "confidence": 0.85
+   }
+
+2. Agent starts episode:
+   - Creates BehavioralEpisode with UUID
+   - Stores in Postgres: INSERT INTO behavioral_episodes (jsonld) VALUES (...)
+   - Publishes started event
+
+3. Published event:
+   Topic: automation/behavior/episode/started
+   Payload: {
+     "location": "living_room",
+     "trigger_type": "occupancy_transition"
+   }
+
+4. [Time passes, media starts, lights adjusted...]
+
+5. Occupancy cleared:
+   Topic: automation/context/occupancy/living_room
+   Payload: {
+     "location": "living_room",
+     "state": "empty",
+     "confidence": 0.9
+   }
+
+6. Agent ends episode:
+   - Updates episode: UPDATE behavioral_episodes SET jsonld = jsonb_set(...)
+   - Publishes closed event
+
+7. Published event:
+   Topic: automation/behavior/episode/closed
+   Payload: {
+     "location": "living_room",
+     "end_reason": "occupancy_empty"
+   }
+```
+
+### Ontology Standards
+
+The Behavior Agent uses semantic web standards for interoperability:
+
+- **SAREF** (Smart Applications REFerence): Base ontology for IoT devices
+- **SSN/SOSA**: Semantic Sensor Network ontology
+- **ADL**: Activities of Daily Living ontology
+- **PROV**: Provenance tracking
+- **Custom**: `jeeves:` namespace for platform-specific concepts
+
+**JSON-LD Context**:
+```json
+{
+  "@vocab": "https://saref.etsi.org/core#",
+  "jeeves": "https://jeeves.home/vocab#",
+  "adl": "http://purl.org/adl#",
+  "sosa": "http://www.w3.org/ns/sosa/",
+  "prov": "http://www.w3.org/ns/prov#",
+  "xsd": "http://www.w3.org/2001/XMLSchema#"
+}
+```
+
+### Dependencies
+
+- **MQTT**: Eclipse Paho
+- **Redis**: go-redis (for shared state, minimal usage)
+- **Postgres**: lib/pq driver
+- **Config**: Shared config
+- **Ontology**: pkg/ontology (JSON-LD types)
+
+### Configuration
+
+```bash
+# Environment variables
+JEEVES_POSTGRES_HOST=localhost
+JEEVES_POSTGRES_PORT=5432
+JEEVES_POSTGRES_DB=jeeves_behavior
+JEEVES_POSTGRES_USER=jeeves
+JEEVES_POSTGRES_PASSWORD=secret
+```
+
+### Example Flow
+
+```
+1. Occupancy transition received: automation/context/occupancy/living_room
+   Payload: {"location": "living_room", "state": "occupied", "confidence": 0.85}
+
+2. Agent checks previous state:
+   - Previous: "empty"
+   - Current: "occupied"
+   - Trigger: START EPISODE
+
+3. Create episode:
+   - Generate UUID: urn:uuid:550e8400-e29b-41d4-a716-446655440000
+   - Build JSON-LD document with ontology
+   - Insert into Postgres
+
+4. Store episode ID:
+   - activeEpisodes["living_room"] = "550e8400-..."
+
+5. Publish started event:
+   - Topic: automation/behavior/episode/started
+   - Payload: {"location": "living_room", "trigger_type": "occupancy_transition"}
+
+6. [Activity continues, episode remains active]
+
+7. Occupancy transition: "occupied" → "empty"
+
+8. Close episode:
+   - Retrieve episode ID from activeEpisodes
+   - Update Postgres: SET jsonld = jsonb_set(jsonld, '{jeeves:endedAt}', ...)
+   - Remove from activeEpisodes
+   - Publish closed event
+```
+
+### Performance
+
+- **Latency**: < 50ms (database write + publish)
+- **Memory**: ~128 MB
+- **CPU**: ~50 MHz
+- **Database**: 1 write per episode start/end
+
+### Current Limitations
+
+This is a **stub implementation** for E2E testing infrastructure. Currently implemented:
+- ✅ Episode start/end based on occupancy
+- ✅ Postgres storage with JSON-LD
+- ✅ Episode lifecycle events published
+- ✅ Basic ontology structure
+
+**Not yet implemented**:
+- ❌ Lighting event tracking (handler is stub)
+- ❌ Media event tracking (handler is stub)
+- ❌ Activity inference from patterns
+- ❌ Episode querying and analysis
+- ❌ Integration with learning/prediction systems
+
+---
+
 ## Agent Comparison
 
-| Aspect | Collector | Occupancy | Illuminance | Light |
-|--------|-----------|-----------|-------------|-------|
-| **Complexity** | Low | High | Medium | Medium |
-| **LOC** | ~400 | ~3,300 | ~800 | ~1,200 |
-| **Latency** | < 10ms | 1-5s (LLM) | < 50ms | < 100ms |
-| **CPU** | ~50 MHz | ~100 MHz | ~50 MHz | ~100 MHz |
-| **Memory** | ~128 MB | ~128 MB | ~128 MB | ~128 MB |
-| **External Deps** | None | LLM (Ollama) | None | None |
-| **Trigger Mode** | Event (MQTT) | Trigger + Periodic | Trigger + Periodic | Event + Periodic |
-| **State Storage** | None | Redis (history, state, predictions) | Redis (history) | Redis (overrides) |
-| **Publish Rate** | Every event | On state change | On label change | On decision |
-| **Critical Path** | Yes | Yes | No | Yes |
+| Aspect | Collector | Occupancy | Illuminance | Light | Behavior |
+|--------|-----------|-----------|-------------|-------|----------|
+| **Complexity** | Low | High | Medium | Medium | Low (Stub) |
+| **LOC** | ~400 | ~3,300 | ~800 | ~1,200 | ~210 |
+| **Latency** | < 10ms | 1-5s (LLM) | < 50ms | < 100ms | < 50ms |
+| **CPU** | ~50 MHz | ~100 MHz | ~50 MHz | ~100 MHz | ~50 MHz |
+| **Memory** | ~128 MB | ~128 MB | ~128 MB | ~128 MB | ~128 MB |
+| **External Deps** | None | LLM (Ollama) | None | None | Postgres |
+| **Trigger Mode** | Event (MQTT) | Trigger + Periodic | Trigger + Periodic | Event + Periodic | Event (MQTT) |
+| **State Storage** | None | Redis (history, state, predictions) | Redis (history) | Redis (overrides) | Postgres (episodes) |
+| **Publish Rate** | Every event | On state change | On label change | On decision | On episode boundary |
+| **Critical Path** | Yes | Yes | No | Yes | No |
 
 ### Complexity Drivers
 
@@ -1036,6 +1289,7 @@ JEEVES_API_PORT=3002                   # HTTP API for manual control
 - **Occupancy**: LLM integration, stabilization, gates, multiple analysis modes
 - **Illuminance**: Astronomical calculations, trend detection, daylight fallback
 - **Light**: Decision logic, rate limiting, overrides, color temperature
+- **Behavior**: JSON-LD ontology, episode lifecycle, Postgres integration (stub for now)
 
 ### Failure Modes
 
@@ -1046,6 +1300,8 @@ JEEVES_API_PORT=3002                   # HTTP API for manual control
 | **Occupancy** | LLM unavailable | Uses fallback | **Low** - Deterministic fallback logic |
 | **Illuminance** | Crashes | No illuminance context | **Medium** - Light agent uses last known state |
 | **Light** | Crashes | No lighting commands | **High** - Manual control still works |
+| **Behavior** | Crashes | Episodes not recorded | **Low** - No impact on real-time automation |
+| **Behavior** | Postgres down | Episodes not stored | **Low** - Agent continues, logs errors |
 
 **Restart Strategy**: All agents auto-restart via Nomad. No data loss (state in Redis).
 

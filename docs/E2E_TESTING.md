@@ -27,6 +27,24 @@ e2e/
 
 ## Scenario Definition Format (YAML)
 
+### Event Types
+
+The E2E framework supports three types of events:
+
+1. **Sensor Events** - Raw sensor data (motion, temperature, illuminance)
+   - Format: `sensor: "type:location"` + `value: <data>`
+   - Published to: `automation/raw/{type}/{location}`
+
+2. **Context Events** - Semantic context from agents (occupancy, lighting)
+   - Format: `type: "occupancy|lighting"` + `location: "room"` + `data: {...}`
+   - Published to: `automation/context/{type}/{location}`
+
+3. **Media Events** - Media playback state (playing, paused, stopped)
+   - Format: `type: "media"` + `location: "room"` + `data: {state: "playing", ...}`
+   - Published to: `automation/media/{state}/{location}`
+
+### Basic Scenario (Raw Sensors Only)
+
 ```yaml
 # test-scenarios/hallway_passthrough.yaml
 name: "Hallway Pass-Through"
@@ -59,13 +77,13 @@ expectations:
         sensorId: "hallway-sensor-1"
         sensorType: "motion"
         value: true
-    
+
   redis_storage:
     - time: 1
       key: "sensor:motion:hallway-sensor-1"
       field: "value"
       expected: "true"
-    
+
   occupancy_decision:
     - time: 180  # After 3 min periodic check
       topic: "occupancy/status/hallway"
@@ -74,6 +92,116 @@ expectations:
         occupied: false  # Pass-through detected
         confidence: ">0.7"
         reasoning: "~Single motion|pass.*through~"  # Regex match
+```
+
+### Advanced Scenario (Context + Media Events + Postgres)
+
+```yaml
+# test-scenarios/movie_night.yaml
+name: "Movie Night"
+description: "Person watches movie with lights dimming"
+
+setup:
+  location: "living_room"
+  initial_state:
+    occupancy: null
+
+events:
+  # Raw sensor event (existing format)
+  - time: 0
+    sensor: "motion:living_room"
+    value: true
+    description: "Person enters living room"
+
+  # Context event - occupancy (new format)
+  - time: 2
+    type: occupancy
+    location: living_room
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Occupancy detected"
+
+  # Context event - lighting (new format)
+  - time: 5
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 80
+      color_temp: 4000
+      source: "automated"
+    description: "Lights on"
+
+  # Media event (new format)
+  - time: 10
+    type: media
+    location: living_room
+    data:
+      state: "playing"
+      media_type: "video"
+      source: "apple_tv"
+    description: "Start movie"
+
+  # Manual lighting adjustment
+  - time: 12
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 15
+      color_temp: 2700
+      source: "manual"
+    description: "Dim lights for movie"
+
+  # Movie ends
+  - time: 600  # 10 minutes for quick test
+    type: media
+    location: living_room
+    data:
+      state: "stopped"
+      media_type: "video"
+    description: "Movie ends"
+
+  # Person leaves
+  - time: 620
+    type: occupancy
+    location: living_room
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Person leaves"
+
+expectations:
+  # Behavior agent should publish episode events
+  behavior_events:
+    - time: 5
+      topic: "automation/behavior/episode/started"
+      payload:
+        location: "living_room"
+
+    - time: 625
+      topic: "automation/behavior/episode/closed"
+      payload:
+        location: "living_room"
+        end_reason: "occupancy_empty"
+
+  # Postgres database checks (new)
+  postgres:
+    - time: 630
+      postgres_query: "SELECT COUNT(*) FROM behavioral_episodes WHERE location = 'living_room'"
+      postgres_expected: 1
+
+    - time: 630
+      postgres_query: |
+        SELECT
+        EXTRACT(EPOCH FROM (
+          (jsonld->>'jeeves:endedAt')::timestamptz - (jsonld->>'jeeves:startedAt')::timestamptz
+        ))::int / 60 as duration_minutes
+        FROM behavioral_episodes
+        ORDER BY id DESC
+        LIMIT 1
+      postgres_expected: "~10"  # Approximate match (±20%)
 ```
 
 ```yaml
@@ -152,6 +280,22 @@ services:
       timeout: 3s
       retries: 3
 
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: jeeves_behavior
+      POSTGRES_USER: jeeves
+      POSTGRES_PASSWORD: jeeves_test
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jeeves"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   # Test observer - captures all MQTT traffic
   mqtt_observer:
     build:
@@ -211,6 +355,29 @@ services:
       LLM_MODEL: "deepseek-coder:6.7b"
       ANALYSIS_INTERVAL: "60s"  # Faster for testing
 
+  behavior-agent:
+    build:
+      context: ..
+      dockerfile: cmd/behavior-agent/Dockerfile
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      JEEVES_MQTT_BROKER: "mosquitto"
+      JEEVES_MQTT_PORT: 1883
+      JEEVES_REDIS_HOST: "redis"
+      JEEVES_REDIS_PORT: 6379
+      JEEVES_POSTGRES_HOST: "postgres"
+      JEEVES_POSTGRES_DB: "jeeves_behavior"
+      JEEVES_POSTGRES_USER: "jeeves"
+      JEEVES_POSTGRES_PASSWORD: "jeeves_test"
+      JEEVES_POSTGRES_PORT: 5432
+      JEEVES_LOG_LEVEL: "debug"
+
   # Test runner - orchestrates scenarios
   test-runner:
     build:
@@ -219,14 +386,17 @@ services:
     depends_on:
       - mosquitto
       - redis
+      - postgres
       - collector
       - occupancy-agent
+      - behavior-agent
     volumes:
       - ../test-scenarios:/scenarios
       - ./test-output:/output
     environment:
       MQTT_BROKER: "mosquitto:1883"
       REDIS_HOST: "redis:6379"
+      POSTGRES_HOST: "postgres:5432"
     command: ["--scenario", "/scenarios/hallway_passthrough.yaml"]
 ```
 
@@ -571,6 +741,162 @@ Layer: occupancy_decision
 ╚══════════════════════════════════════════════════════════╝
 ```
 
+## Postgres Checker (Database Validation)
+
+The PostgresChecker validates database state for agents that use Postgres (e.g., Behavior Agent).
+
+```go
+// e2e/internal/checker/postgres_checker.go
+package checker
+
+import (
+    "database/sql"
+    "fmt"
+    "log"
+    "strconv"
+    "strings"
+
+    _ "github.com/lib/pq"
+)
+
+// PostgresChecker validates database state
+type PostgresChecker struct {
+    db     *sql.DB
+    logger *log.Logger
+}
+
+// NewPostgresChecker creates a new Postgres checker
+func NewPostgresChecker(connStr string, logger *log.Logger) (*PostgresChecker, error) {
+    db, err := sql.Open("postgres", connStr)
+    if err != nil {
+        return nil, fmt.Errorf("failed to connect to postgres: %w", err)
+    }
+
+    if err := db.Ping(); err != nil {
+        return nil, fmt.Errorf("failed to ping postgres: %w", err)
+    }
+
+    return &PostgresChecker{db: db, logger: logger}, nil
+}
+
+// CheckQuery executes a query and compares result
+func (p *PostgresChecker) CheckQuery(query string, expected interface{}) error {
+    var result interface{}
+    err := p.db.QueryRow(query).Scan(&result)
+    if err != nil {
+        return fmt.Errorf("query failed: %w", err)
+    }
+
+    return p.compareResults(result, expected)
+}
+
+func (p *PostgresChecker) compareResults(actual, expected interface{}) error {
+    // Handle approximate matches: "~10" means 8-12 (±20%)
+    if expectedStr, ok := expected.(string); ok {
+        if strings.HasPrefix(expectedStr, "~") {
+            return p.compareApproximate(actual, expectedStr)
+        }
+    }
+
+    // Exact match
+    actualStr := fmt.Sprintf("%v", actual)
+    expectedStr := fmt.Sprintf("%v", expected)
+
+    if actualStr == expectedStr {
+        return nil
+    }
+
+    return fmt.Errorf("mismatch: expected %v, got %v", expected, actual)
+}
+
+func (p *PostgresChecker) compareApproximate(actual interface{}, expectedStr string) error {
+    // Parse "~10" as target 10 with ±20% tolerance
+    targetStr := strings.TrimPrefix(expectedStr, "~")
+    target, err := strconv.ParseFloat(targetStr, 64)
+    if err != nil {
+        return fmt.Errorf("invalid approximate value: %s", expectedStr)
+    }
+
+    // Convert actual to float
+    var actualFloat float64
+    switch v := actual.(type) {
+    case int64:
+        actualFloat = float64(v)
+    case float64:
+        actualFloat = v
+    case string:
+        actualFloat, err = strconv.ParseFloat(v, 64)
+        if err != nil {
+            return fmt.Errorf("cannot convert actual value to number: %v", actual)
+        }
+    default:
+        return fmt.Errorf("unsupported type for approximate comparison: %T", actual)
+    }
+
+    // 20% tolerance
+    tolerance := target * 0.2
+    if actualFloat >= (target-tolerance) && actualFloat <= (target+tolerance) {
+        return nil
+    }
+
+    return fmt.Errorf("value %.2f not within ±20%% of %.0f", actualFloat, target)
+}
+```
+
+### Postgres Expectations in Scenarios
+
+```yaml
+expectations:
+  # Standard MQTT expectations
+  behavior_events:
+    - time: 5
+      topic: "automation/behavior/episode/started"
+      payload:
+        location: "living_room"
+
+  # Postgres database checks
+  postgres:
+    # Exact match
+    - time: 630
+      postgres_query: "SELECT COUNT(*) FROM behavioral_episodes WHERE location = 'living_room'"
+      postgres_expected: 1
+
+    # Approximate match (±20% tolerance)
+    - time: 630
+      postgres_query: |
+        SELECT
+        EXTRACT(EPOCH FROM (
+          (jsonld->>'jeeves:endedAt')::timestamptz - (jsonld->>'jeeves:startedAt')::timestamptz
+        ))::int / 60 as duration_minutes
+        FROM behavioral_episodes
+        ORDER BY id DESC
+        LIMIT 1
+      postgres_expected: "~10"  # Accepts 8-12 minutes
+```
+
+### Usage in Test Runner
+
+The test runner automatically detects Postgres expectations and uses the PostgresChecker:
+
+```go
+// Execute Postgres checks if present
+if postgresExpectations, ok := s.Expectations["postgres"]; ok {
+    for _, expect := range postgresExpectations {
+        if expect.PostgresQuery != "" {
+            err := r.postgresChecker.CheckQuery(
+                expect.PostgresQuery,
+                expect.PostgresExpected,
+            )
+            if err != nil {
+                // Record failure
+            } else {
+                // Record success
+            }
+        }
+    }
+}
+```
+
 ## Advantages of This Approach
 
 1. **Scenario-Driven**: Test real user stories, not infrastructure
@@ -581,10 +907,13 @@ Layer: occupancy_decision
 6. **No Test Code in Agents**: Agents remain production code
 7. **Easy to Add Cases**: New YAML file = new test
 8. **Visual Output**: Timeline shows the complete flow
+9. **Multi-Backend**: Supports Redis, Postgres, and MQTT validation
 
 ## Adding New Test Scenarios
 
-Just create a new YAML file:
+Just create a new YAML file with any combination of event types:
+
+### Simple Sensor-Only Scenario
 
 ```yaml
 # test-scenarios/bedroom_morning.yaml
@@ -596,12 +925,12 @@ events:
     sensor: "motion:bedroom-sensor-1"
     value: true
     description: "Person wakes up"
-  
+
   - time: 120
     sensor: "motion:bedroom-sensor-1"
     value: true
     description: "Getting dressed"
-  
+
   - time: 240
     sensor: "motion:bedroom-sensor-1"
     value: true
@@ -618,6 +947,74 @@ expectations:
       payload:
         occupied: false
         confidence: ">0.7"
+```
+
+### Advanced Scenario with Context and Media Events
+
+```yaml
+# test-scenarios/study_deep_work.yaml
+name: "Study - Deep Work Session"
+description: "Person works with focus mode and controlled lighting"
+
+events:
+  # Raw sensor
+  - time: 0
+    sensor: "motion:study"
+    value: true
+    description: "Person enters"
+
+  # Context event - occupancy
+  - time: 2
+    type: occupancy
+    location: study
+    data:
+      state: "occupied"
+      confidence: 0.9
+    description: "Occupancy confirmed"
+
+  # Context event - lighting adjustment
+  - time: 5
+    type: lighting
+    location: study
+    data:
+      state: "on"
+      brightness: 60
+      color_temp: 4500
+      source: "automated"
+    description: "Work lighting activated"
+
+  # Media event - focus music
+  - time: 10
+    type: media
+    location: study
+    data:
+      state: "playing"
+      media_type: "audio"
+      source: "spotify"
+    description: "Focus music starts"
+
+  # Manual lighting adjustment
+  - time: 15
+    type: lighting
+    location: study
+    data:
+      state: "on"
+      brightness: 40
+      color_temp: 3000
+      source: "manual"
+    description: "User dims for comfort"
+
+expectations:
+  behavior_events:
+    - time: 5
+      topic: "automation/behavior/episode/started"
+      payload:
+        location: "study"
+
+  postgres:
+    - time: 30
+      postgres_query: "SELECT COUNT(*) FROM behavioral_episodes WHERE location = 'study'"
+      postgres_expected: 1
 ```
 
 This keeps complexity in the framework (write once) and scenarios simple (YAML declarations).

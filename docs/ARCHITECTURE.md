@@ -28,6 +28,7 @@ graph TB
         PIR[PIR Sensors]
         TEMP[Temperature]
         ILLUM[Illuminance]
+        MEDIA[Media Players]
         RAW[Raw Sensor Data<br/>automation/raw/+/+]
     end
 
@@ -45,6 +46,11 @@ graph TB
         LIGHT[Light Agent<br/>Matter Bridge]
     end
 
+    subgraph "Learning Layer"
+        BEH[Behavior Agent<br/>Episode Tracking]
+        POSTGRES[(Postgres<br/>Semantic Episodes)]
+    end
+
     subgraph "Infrastructure"
         MQTT[MQTT Broker<br/>Mosquitto]
     end
@@ -52,6 +58,7 @@ graph TB
     PIR -->|motion events| RAW
     TEMP -->|temp readings| RAW
     ILLUM -->|lux readings| RAW
+    MEDIA -->|playback events| MQTT
 
     RAW -->|automation/raw/{type}/{loc}| COLL
     COLL -->|stores| REDIS
@@ -62,15 +69,22 @@ graph TB
     ILL -->|reads history| REDIS
 
     OCC -->|automation/context/occupancy/{loc}| LIGHT
+    OCC -->|automation/context/occupancy/{loc}| BEH
     ILL -->|automation/context/illuminance/{loc}| LIGHT
 
     LIGHT -->|automation/command/light/{loc}| Matter[Matter Devices]
     LIGHT -->|automation/context/lighting/{loc}| MQTT
+    LIGHT -->|automation/context/lighting/{loc}| BEH
+
+    MEDIA -->|automation/media/{state}/{loc}| BEH
+
+    BEH -->|stores episodes| POSTGRES
 
     MQTT -.->|pub/sub| COLL
     MQTT -.->|pub/sub| OCC
     MQTT -.->|pub/sub| ILL
     MQTT -.->|pub/sub| LIGHT
+    MQTT -.->|pub/sub| BEH
 ```
 
 ---
@@ -88,6 +102,7 @@ The **Minestrone Soup Architecture** is our core design philosophy:
    - Occupancy: Detects if rooms are occupied
    - Illuminance: Tracks lighting needs
    - Light: Controls physical lights
+   - Behavior: Records behavioral episodes for pattern learning
 
 2. **Loose Coupling**: Agents communicate only via MQTT
    - No direct dependencies between agents
@@ -253,13 +268,15 @@ jeeves-platform/
 │   │   └── *_test.go            # Unit tests
 │   ├── illuminance/
 │   ├── light/
-│   └── occupancy/
-│       ├── agent.go
-│       ├── abstraction.go       # Temporal pattern abstraction
-│       ├── stabilization.go     # Vonich-Hakim stabilization
-│       ├── llm.go               # LLM integration
-│       ├── fallback.go          # Deterministic fallback
-│       └── gates.go             # Confidence & timing gates
+│   ├── occupancy/
+│   │   ├── agent.go
+│   │   ├── abstraction.go       # Temporal pattern abstraction
+│   │   ├── stabilization.go     # Vonich-Hakim stabilization
+│   │   ├── llm.go               # LLM integration
+│   │   ├── fallback.go          # Deterministic fallback
+│   │   └── gates.go             # Confidence & timing gates
+│   └── behavior/                # NEW: Behavioral episode tracking
+│       └── agent.go             # Episode lifecycle management
 │
 ├── pkg/                          # Shared infrastructure (reusable)
 │   ├── config/                  # Configuration hierarchy
@@ -271,7 +288,10 @@ jeeves-platform/
 │   │   ├── client.go
 │   │   ├── interface.go
 │   │   └── keys.go              # Key construction helpers
-│   └── health/                  # Health check primitives
+│   ├── health/                  # Health check primitives
+│   └── ontology/                # NEW: JSON-LD semantic types
+│       ├── context.go           # JSON-LD context definitions
+│       └── episode.go           # BehavioralEpisode types
 │
 ├── e2e/                          # End-to-end testing framework
 │   ├── internal/
@@ -279,6 +299,7 @@ jeeves-platform/
 │   │   ├── executor/            # Event playback (MQTT player)
 │   │   ├── observer/            # Passive MQTT traffic capture
 │   │   ├── checker/             # Expectation matching
+│   │   │   └── postgres_checker.go  # NEW: Database validation
 │   │   └── reporter/            # Timeline output
 │   ├── cmd/
 │   │   ├── test-runner/
@@ -289,7 +310,8 @@ jeeves-platform/
 ├── test-scenarios/               # YAML test scenarios
 │   ├── hallway_passthrough.yaml
 │   ├── study_working.yaml
-│   └── bedroom_morning.yaml
+│   ├── bedroom_morning.yaml
+│   └── movie_night.yaml         # NEW: Context + media events
 │
 ├── docs/                         # Agent specifications
 │   ├── collector/
@@ -480,15 +502,24 @@ graph LR
 - **Network**: < 1 KB/s (MQTT messages are small)
 - **Disk**: None (stateless binaries)
 
-### Redis Storage
+### Redis Storage (Time-Series)
 - **Motion Data**: ~10 KB per location per day
 - **Environmental Data**: ~5 KB per location per day
 - **Total**: ~100 KB/day for typical home
 - **Retention**: 24 hours → ~100 KB total
+- **Purpose**: Real-time sensor data, analysis inputs
+
+### Postgres Storage (Semantic Episodes)
+- **Episode Size**: ~2-5 KB per episode (JSON-LD)
+- **Episode Rate**: 5-20 episodes per day (varies by activity)
+- **Total**: ~50-100 KB/day for typical home
+- **Retention**: Indefinite (for pattern learning)
+- **Purpose**: Long-term behavioral patterns, activity inference
 
 ### Scalability Limits
 - **Single Redis**: Handles 1000s of events/sec (way over our needs)
 - **Single MQTT Broker**: Handles 1000s of clients (we have ~10)
+- **Single Postgres**: Handles 100s of episodes/day (we have ~20)
 - **Agent Instances**: Each agent can run 1 instance (no load balancing needed yet)
 
 **Bottleneck**: LLM inference latency (~1-5s per occupancy analysis)

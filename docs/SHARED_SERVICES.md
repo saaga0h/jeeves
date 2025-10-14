@@ -8,6 +8,7 @@ Documentation for the `pkg/` infrastructure packages used across all agents.
 - [Redis Package](#redis-package)
 - [Config Package](#config-package)
 - [Health Package](#health-package)
+- [Ontology Package](#ontology-package)
 - [Usage Patterns](#usage-patterns)
 
 ---
@@ -33,8 +34,11 @@ pkg/
 │   ├── interfaces.go  # Testable interfaces
 │   ├── client.go      # go-redis wrapper
 │   └── keys.go        # Key construction helpers
-└── health/         # Health check primitives
-    └── health.go      # HTTP health endpoint
+├── health/         # Health check primitives
+│   └── health.go      # HTTP health endpoint
+└── ontology/       # Semantic web types (JSON-LD)
+    ├── context.go     # JSON-LD context definitions
+    └── episode.go     # BehavioralEpisode types
 ```
 
 ---
@@ -603,6 +607,268 @@ func main() {
     server.Shutdown(shutdownCtx)
 }
 ```
+
+---
+
+## Ontology Package
+
+**Location**: [`pkg/ontology/`](../pkg/ontology/)
+**Purpose**: Semantic web types using JSON-LD for interoperable behavioral episode storage
+
+### Overview
+
+The ontology package provides JSON-LD types for representing behavioral episodes using standard semantic web vocabularies. This enables interoperability with other smart home systems and future AI/ML analysis tools.
+
+### JSON-LD Context
+
+**File**: `pkg/ontology/context.go`
+
+```go
+package ontology
+
+// GetDefaultContext returns the standard JSON-LD context
+func GetDefaultContext() map[string]interface{} {
+    return map[string]interface{}{
+        "@vocab": "https://saref.etsi.org/core#",
+        "jeeves": "https://jeeves.home/vocab#",
+        "adl":    "http://purl.org/adl#",
+        "sosa":   "http://www.w3.org/ns/sosa/",
+        "prov":   "http://www.w3.org/ns/prov#",
+        "xsd":    "http://www.w3.org/2001/XMLSchema#",
+    }
+}
+```
+
+**Vocabularies Used**:
+- **SAREF** (Smart Applications REFerence): Base ontology for IoT devices and smart home concepts
+- **ADL** (Activities of Daily Living): Ontology for human activities (eating, sleeping, working, etc.)
+- **SSN/SOSA** (Semantic Sensor Network): Sensor observations and actuations
+- **PROV** (Provenance): Data lineage and causality
+- **jeeves**: Custom vocabulary for J.E.E.V.E.S.-specific concepts
+
+### Behavioral Episode Types
+
+**File**: `pkg/ontology/episode.go`
+
+```go
+package ontology
+
+import (
+    "fmt"
+    "time"
+
+    "github.com/google/uuid"
+)
+
+// BehavioralEpisode is the root JSON-LD document
+type BehavioralEpisode struct {
+    Context    map[string]interface{} `json:"@context"`
+    Type       string                 `json:"@type"`
+    ID         string                 `json:"@id"`
+    StartedAt  time.Time              `json:"jeeves:startedAt"`
+    EndedAt    *time.Time             `json:"jeeves:endedAt,omitempty"`
+    DayOfWeek  string                 `json:"jeeves:dayOfWeek"`
+    TimeOfDay  string                 `json:"jeeves:timeOfDay"`
+    Duration   string                 `json:"jeeves:duration,omitempty"`
+    Activity   Activity               `json:"adl:activity"`
+    EnvContext EnvironmentalContext   `json:"jeeves:hadEnvironmentalContext"`
+}
+
+type Activity struct {
+    Type     string   `json:"@type"`
+    Name     string   `json:"name"`
+    Location Location `json:"adl:location"`
+}
+
+type Location struct {
+    Type string `json:"@type"`
+    ID   string `json:"@id"`
+    Name string `json:"name"`
+}
+
+type EnvironmentalContext struct {
+    Type string `json:"@type"`
+    ID   string `json:"@id"`
+}
+
+// NewEpisode creates a new behavioral episode
+func NewEpisode(activity Activity, location Location) *BehavioralEpisode {
+    now := time.Now()
+
+    return &BehavioralEpisode{
+        Context:   GetDefaultContext(),
+        Type:      "jeeves:BehavioralEpisode",
+        ID:        fmt.Sprintf("urn:uuid:%s", uuid.New().String()),
+        StartedAt: now,
+        DayOfWeek: now.Weekday().String(),
+        TimeOfDay: getTimeOfDay(now),
+        Activity: Activity{
+            Type:     activity.Type,
+            Name:     activity.Name,
+            Location: location,
+        },
+        EnvContext: EnvironmentalContext{
+            Type: "jeeves:EnvironmentalContext",
+            ID:   fmt.Sprintf("urn:uuid:%s", uuid.New().String()),
+        },
+    }
+}
+
+func getTimeOfDay(t time.Time) string {
+    hour := t.Hour()
+    switch {
+    case hour < 6:
+        return "night"
+    case hour < 12:
+        return "morning"
+    case hour < 17:
+        return "afternoon"
+    case hour < 21:
+        return "evening"
+    default:
+        return "night"
+    }
+}
+```
+
+### Example Episode JSON-LD
+
+When stored in Postgres, a behavioral episode looks like:
+
+```json
+{
+  "@context": {
+    "@vocab": "https://saref.etsi.org/core#",
+    "jeeves": "https://jeeves.home/vocab#",
+    "adl": "http://purl.org/adl#",
+    "sosa": "http://www.w3.org/ns/sosa/",
+    "prov": "http://www.w3.org/ns/prov#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#"
+  },
+  "@type": "jeeves:BehavioralEpisode",
+  "@id": "urn:uuid:550e8400-e29b-41d4-a716-446655440000",
+  "jeeves:startedAt": "2025-10-14T14:30:00Z",
+  "jeeves:endedAt": "2025-10-14T15:45:00Z",
+  "jeeves:dayOfWeek": "Tuesday",
+  "jeeves:timeOfDay": "afternoon",
+  "adl:activity": {
+    "@type": "adl:Present",
+    "name": "Present",
+    "adl:location": {
+      "@type": "saref:Room",
+      "@id": "urn:room:living_room",
+      "name": "living_room"
+    }
+  },
+  "jeeves:hadEnvironmentalContext": {
+    "@type": "jeeves:EnvironmentalContext",
+    "@id": "urn:uuid:650e8400-e29b-41d4-a716-446655440001"
+  }
+}
+```
+
+### Usage in Agents
+
+**Behavior Agent** ([internal/behavior/agent.go](../internal/behavior/agent.go:132-144)):
+
+```go
+import (
+    "github.com/saaga0h/jeeves-platform/pkg/ontology"
+)
+
+func (a *Agent) startEpisode(location string) {
+    // Create minimal episode
+    episode := ontology.NewEpisode(
+        ontology.Activity{
+            Type: "adl:Present",
+            Name: "Present",
+        },
+        ontology.Location{
+            Type: "saref:Room",
+            ID:   fmt.Sprintf("urn:room:%s", location),
+            Name: location,
+        },
+    )
+
+    // Store in Postgres
+    jsonld, _ := json.Marshal(episode)
+
+    var id string
+    err := a.db.QueryRow(
+        "INSERT INTO behavioral_episodes (jsonld) VALUES ($1) RETURNING id",
+        jsonld,
+    ).Scan(&id)
+
+    if err != nil {
+        a.logger.Error("Failed to create episode", "error", err)
+        return
+    }
+
+    a.activeEpisodes[location] = id
+    a.logger.Info("Episode started", "location", location, "id", id)
+}
+```
+
+### Why JSON-LD?
+
+1. **Interoperability**: Other smart home systems can understand our data
+2. **Semantic Queries**: Can query by activity type using standard vocabularies
+3. **Future-Proof**: AI/ML tools can leverage semantic relationships
+4. **Standards-Based**: SAREF is an ETSI standard for smart home IoT
+5. **Flexible**: Easy to add new fields while maintaining compatibility
+
+### Postgres Storage
+
+Episodes are stored as JSONB in Postgres for efficient querying:
+
+```sql
+CREATE TABLE behavioral_episodes (
+    id SERIAL PRIMARY KEY,
+    jsonld JSONB NOT NULL,
+    location TEXT GENERATED ALWAYS AS (jsonld->'adl:activity'->'adl:location'->>'name') STORED,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_episodes_location ON behavioral_episodes(location);
+CREATE INDEX idx_episodes_jsonld ON behavioral_episodes USING gin(jsonld);
+```
+
+**Query Examples**:
+
+```sql
+-- Find all episodes in living_room
+SELECT * FROM behavioral_episodes WHERE location = 'living_room';
+
+-- Find episodes by time of day
+SELECT * FROM behavioral_episodes WHERE jsonld->>'jeeves:timeOfDay' = 'evening';
+
+-- Find episodes by day of week
+SELECT * FROM behavioral_episodes WHERE jsonld->>'jeeves:dayOfWeek' = 'Monday';
+
+-- Calculate average episode duration
+SELECT
+  location,
+  AVG(EXTRACT(EPOCH FROM (
+    (jsonld->>'jeeves:endedAt')::timestamptz -
+    (jsonld->>'jeeves:startedAt')::timestamptz
+  )) / 60) as avg_duration_minutes
+FROM behavioral_episodes
+WHERE jsonld->>'jeeves:endedAt' IS NOT NULL
+GROUP BY location;
+```
+
+### Dependencies
+
+- **github.com/google/uuid**: UUID generation for episode IDs
+- **encoding/json**: JSON marshaling for storage
+
+### Future Enhancements
+
+Future versions may include:
+- **Activity Classification**: Detect watching TV, working, cooking, etc.
+- **Environmental Enrichment**: Add lighting levels, temperature, etc. to episodes
+- **Pattern Recognition**: Identify routines from episode history
+- **Preference Learning**: Infer preferred settings for different activities
 
 ---
 

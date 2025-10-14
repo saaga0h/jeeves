@@ -917,6 +917,183 @@ func (a *Agent) processWithFallback(ctx context.Context, data Data) Result {
 }
 ```
 
+### Pattern 6: Postgres Integration
+
+**For agents that need long-term semantic storage** (like behavioral episodes):
+
+#### Step 1: Import the database driver
+
+In your `cmd/myagent-agent/main.go`:
+
+```go
+import (
+	"database/sql"
+
+	_ "github.com/lib/pq"  // Import Postgres driver (blank import)
+
+	"github.com/saaga0h/jeeves-platform/internal/myagent"
+	// ... other imports
+)
+```
+
+#### Step 2: Initialize Postgres connection
+
+In your `main()` function:
+
+```go
+// Initialize MQTT client
+mqttClient := mqtt.NewClient(cfg, logger)
+
+// Initialize Redis client
+redisClient := redis.NewClient(cfg, logger)
+
+// Initialize Postgres (if needed)
+var db *sql.DB
+if cfg.PostgresEnabled() {
+	connStr := cfg.PostgresConnectionString()
+	var err error
+	db, err = sql.Open("postgres", connStr)
+	if err != nil {
+		logger.Error("Failed to connect to Postgres", "error", err)
+		os.Exit(1)
+	}
+
+	if err := db.Ping(); err != nil {
+		logger.Error("Failed to ping Postgres", "error", err)
+		os.Exit(1)
+	}
+
+	logger.Info("Connected to Postgres", "host", cfg.PostgresHost)
+	defer db.Close()
+}
+
+// Create agent
+agent := myagent.NewAgent(mqttClient, redisClient, db, cfg, logger)
+```
+
+#### Step 3: Use Postgres in agent
+
+In your `internal/myagent/agent.go`:
+
+```go
+import (
+	"database/sql"
+	"encoding/json"
+)
+
+type Agent struct {
+	mqtt   mqtt.Client
+	redis  redis.Client
+	db     *sql.DB  // Can be nil if Postgres not needed
+	cfg    *config.Config
+	logger *slog.Logger
+}
+
+func NewAgent(mqttClient mqtt.Client, redisClient redis.Client, db *sql.DB, cfg *config.Config, logger *slog.Logger) (*Agent, error) {
+	return &Agent{
+		mqtt:   mqttClient,
+		redis:  redisClient,
+		db:     db,
+		cfg:    cfg,
+		logger: logger,
+	}, nil
+}
+
+// Example: Store semantic data
+func (a *Agent) storeEpisode(episode *ontology.BehavioralEpisode) error {
+	if a.db == nil {
+		a.logger.Warn("Postgres not configured, skipping episode storage")
+		return nil
+	}
+
+	jsonld, err := json.Marshal(episode)
+	if err != nil {
+		return fmt.Errorf("failed to marshal episode: %w", err)
+	}
+
+	var id string
+	err = a.db.QueryRow(
+		"INSERT INTO behavioral_episodes (jsonld) VALUES ($1) RETURNING id",
+		jsonld,
+	).Scan(&id)
+
+	if err != nil {
+		return fmt.Errorf("failed to insert episode: %w", err)
+	}
+
+	a.logger.Info("Episode stored", "id", id)
+	return nil
+}
+
+// Example: Query semantic data
+func (a *Agent) getEpisodesByLocation(location string) ([]Episode, error) {
+	if a.db == nil {
+		return nil, fmt.Errorf("postgres not configured")
+	}
+
+	rows, err := a.db.Query(
+		"SELECT id, jsonld FROM behavioral_episodes WHERE location = $1 ORDER BY created_at DESC LIMIT 10",
+		location,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var episodes []Episode
+	for rows.Next() {
+		var id string
+		var jsonld []byte
+		if err := rows.Scan(&id, &jsonld); err != nil {
+			return nil, err
+		}
+
+		var episode Episode
+		if err := json.Unmarshal(jsonld, &episode); err != nil {
+			a.logger.Warn("Failed to unmarshal episode", "id", id, "error", err)
+			continue
+		}
+
+		episodes = append(episodes, episode)
+	}
+
+	return episodes, nil
+}
+```
+
+#### Step 4: Add Postgres configuration
+
+In your agent's environment variables:
+
+```bash
+# Postgres configuration (optional)
+JEEVES_POSTGRES_HOST=postgres.service.consul
+JEEVES_POSTGRES_PORT=5432
+JEEVES_POSTGRES_DB=jeeves_behavior
+JEEVES_POSTGRES_USER=jeeves
+JEEVES_POSTGRES_PASSWORD=secret
+```
+
+#### When to Use Postgres vs Redis
+
+**Use Redis for**:
+- Time-series sensor data (sorted sets)
+- Short-lived data (< 24 hours)
+- High-frequency writes (1000s/sec)
+- Real-time lookups
+- Cache/temporary state
+
+**Use Postgres for**:
+- Long-term semantic records (months/years)
+- Complex relational data
+- JSON-LD documents for interoperability
+- Data that needs ACID guarantees
+- Analytics and reporting
+
+**Example**: Behavior Agent uses both:
+- Redis: Recent occupancy/lighting state (via other agents)
+- Postgres: Historical behavioral episodes for pattern learning
+
 ---
 
 ## Best Practices
