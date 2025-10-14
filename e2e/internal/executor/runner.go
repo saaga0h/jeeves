@@ -16,24 +16,27 @@ import (
 
 // Runner orchestrates test scenario execution
 type Runner struct {
-	mqttBroker string
-	redisHost  string
-	logger     *log.Logger
-	observer   *observer.Observer
-	player     *MQTTPlayer
-	redisClient *redis.Client
+	mqttBroker      string
+	redisHost       string
+	postgresConn    string
+	logger          *log.Logger
+	observer        *observer.Observer
+	player          *MQTTPlayer
+	redisClient     *redis.Client
+	postgresChecker *checker.PostgresChecker
 }
 
 // NewRunner creates a new test runner
-func NewRunner(mqttBroker, redisHost string, logger *log.Logger) *Runner {
+func NewRunner(mqttBroker, redisHost, postgresConn string, logger *log.Logger) *Runner {
 	if logger == nil {
 		logger = log.Default()
 	}
 
 	return &Runner{
-		mqttBroker: mqttBroker,
-		redisHost:  redisHost,
-		logger:     logger,
+		mqttBroker:   mqttBroker,
+		redisHost:    redisHost,
+		postgresConn: postgresConn,
+		logger:       logger,
 	}
 }
 
@@ -65,17 +68,37 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (*scenario.TestR
 		WaitUntil(startTime, event.Time)
 		elapsed := GetElapsed(startTime)
 
-		r.logger.Printf("[%.2fs] Publishing event: %s = %v (%s)",
-			elapsed, event.Sensor, event.Value, event.Description)
+		// Determine event description
+		var eventDesc string
+		if event.Sensor != "" {
+			eventDesc = fmt.Sprintf("%s = %v (%s)", event.Sensor, event.Value, event.Description)
+		} else {
+			eventDesc = fmt.Sprintf("%s/%s (%s)", event.Type, event.Location, event.Description)
+		}
 
-		if err := r.player.PublishEvent(event); err != nil {
+		r.logger.Printf("[%.2fs] Publishing event: %s", elapsed, eventDesc)
+
+		// Route event based on category
+		var err error
+		switch event.Category() {
+		case "sensor":
+			err = r.player.PublishEvent(event)
+		case "context":
+			err = r.player.PublishContextEvent(event.Type, event.Location, event.Data)
+		case "media":
+			err = r.player.PublishMediaEvent(event.Location, event.Data)
+		default:
+			err = fmt.Errorf("unknown event category")
+		}
+
+		if err != nil {
 			return nil, nil, fmt.Errorf("failed to publish event: %w", err)
 		}
 
 		timelineEvents = append(timelineEvents, reporter.TimelineEvent{
 			Elapsed:     elapsed,
 			Layer:       "sensor",
-			Description: fmt.Sprintf("%s = %v (%s)", event.Sensor, event.Value, event.Description),
+			Description: eventDesc,
 			IsCheck:     false,
 		})
 	}
@@ -117,22 +140,31 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (*scenario.TestR
 		WaitUntil(startTime, le.exp.Time)
 		elapsed := GetElapsed(startTime)
 
-		r.logger.Printf("[%.2fs] Checking expectation: %s - %s",
-			elapsed, le.layer, le.exp.Topic)
+		var checkDesc string
+		if le.exp.Topic != "" {
+			checkDesc = le.exp.Topic
+		} else if le.exp.PostgresQuery != "" {
+			checkDesc = "postgres query"
+		}
 
-		// Get all messages captured so far
-		messages := r.observer.GetAllMessages()
+		r.logger.Printf("[%.2fs] Checking expectation: %s - %s",
+			elapsed, le.layer, checkDesc)
 
 		var passed bool
 		var reason string
 		var actualPayload interface{}
 
-		// Check MQTT expectations
-		if len(le.exp.Payload) > 0 {
-			passed, reason, actualPayload = checker.CheckExpectation(le.exp, messages)
+		// Route to appropriate checker
+		if le.exp.PostgresQuery != "" {
+			// Postgres expectation
+			passed, reason, actualPayload = r.checkPostgresExpectation(ctx, le.exp)
 		} else if le.exp.RedisKey != "" {
-			// Check Redis expectations
+			// Redis expectation
 			passed, reason, actualPayload = checker.CheckRedisExpectation(ctx, r.redisClient, le.exp)
+		} else if len(le.exp.Payload) > 0 {
+			// MQTT expectation
+			messages := r.observer.GetAllMessages()
+			passed, reason, actualPayload = checker.CheckExpectation(le.exp, messages)
 		}
 
 		result := scenario.ExpectationResult{
@@ -157,7 +189,7 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (*scenario.TestR
 		timelineEvents = append(timelineEvents, reporter.TimelineEvent{
 			Elapsed:     elapsed,
 			Layer:       le.layer,
-			Description: le.exp.Topic,
+			Description: checkDesc,
 			Success:     passed,
 			IsCheck:     true,
 		})
@@ -177,16 +209,30 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (*scenario.TestR
 	}
 
 	testResult := &scenario.TestResult{
-		Scenario:      s,
-		StartTime:     startTime,
-		EndTime:       endTime,
-		Passed:        failedCount == 0,
-		PassedCount:   passedCount,
-		FailedCount:   failedCount,
-		Expectations:  expectationResults,
+		Scenario:     s,
+		StartTime:    startTime,
+		EndTime:      endTime,
+		Passed:       failedCount == 0,
+		PassedCount:  passedCount,
+		FailedCount:  failedCount,
+		Expectations: expectationResults,
 	}
 
 	return testResult, timelineEvents, nil
+}
+
+// checkPostgresExpectation checks a Postgres query expectation
+func (r *Runner) checkPostgresExpectation(ctx context.Context, exp scenario.Expectation) (bool, string, interface{}) {
+	if r.postgresChecker == nil {
+		return false, "postgres checker not initialized", nil
+	}
+
+	err := r.postgresChecker.CheckQuery(exp.PostgresQuery, exp.PostgresExpected)
+	if err != nil {
+		return false, fmt.Sprintf("postgres check failed: %v", err), nil
+	}
+
+	return true, "postgres check passed", exp.PostgresExpected
 }
 
 // initialize sets up connections
@@ -214,6 +260,16 @@ func (r *Runner) initialize() error {
 
 	r.logger.Printf("Connected to Redis at %s", r.redisHost)
 
+	// Create Postgres checker (if connection string provided)
+	if r.postgresConn != "" {
+		postgresChecker, err := checker.NewPostgresChecker(r.postgresConn, r.logger)
+		if err != nil {
+			return fmt.Errorf("failed to create Postgres checker: %w", err)
+		}
+		r.postgresChecker = postgresChecker
+		r.logger.Printf("Connected to Postgres")
+	}
+
 	return nil
 }
 
@@ -227,6 +283,9 @@ func (r *Runner) cleanup() {
 	}
 	if r.redisClient != nil {
 		r.redisClient.Close()
+	}
+	if r.postgresChecker != nil {
+		r.postgresChecker.Close()
 	}
 }
 

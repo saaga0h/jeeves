@@ -1,0 +1,105 @@
+name: "Movie Night - Simplified"
+description: "Person watches movie with lights dimming"
+
+setup:
+  location: "living_room"
+  initial_state:
+    occupancy: null
+
+events:
+  # Person enters (raw sensor format you already support)
+  - time: 0
+    sensor: "motion:living_room"
+    value: true
+    description: "Person enters living room"
+
+  # Occupancy agent publishes context (new format)
+  - time: 2
+    type: occupancy
+    location: living_room
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Occupancy detected"
+
+  # Lights turn on (context event)
+  - time: 5
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 80
+      color_temp: 4000
+      source: "automated"
+    description: "Lights on"
+
+  # Movie starts (media event)
+  - time: 10
+    type: media
+    location: living_room
+    data:
+      state: "playing"
+      media_type: "video"
+      source: "apple_tv"
+    description: "Start movie"
+
+  # Person dims lights manually
+  - time: 12
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 15
+      color_temp: 2700
+      source: "manual"
+    description: "Dim lights for movie"
+
+  # Movie ends
+  - time: 600  # 10 minutes for quick test
+    type: media
+    location: living_room
+    data:
+      state: "stopped"
+      media_type: "video"
+    description: "Movie ends"
+
+  # Person leaves
+  - time: 620
+    type: occupancy
+    location: living_room
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Person leaves"
+
+expectations:
+  # Check behavior agent published episode events
+  behavior_events:
+    - time: 5
+      topic: "automation/behavior/episode/started"
+      payload:
+        location: "living_room"
+
+    - time: 625
+      topic: "automation/behavior/episode/closed"
+      payload:
+        location: "living_room"
+        end_reason: "occupancy_empty"
+
+  # Check Postgres has episode
+  postgres:
+    - time: 630
+      postgres_query: "SELECT COUNT(*) FROM behavioral_episodes WHERE location = 'living_room'"
+      postgres_expected: 1
+
+    - time: 630
+      postgres_query: |
+        SELECT 
+          EXTRACT(EPOCH FROM (
+            ended_at_text::timestamptz - started_at_text::timestamptz
+          ))::int / 60 as duration_minutes
+        FROM behavioral_episodes 
+        WHERE location = 'living_room' 
+        ORDER BY started_at_text DESC 
+        LIMIT 1
+      postgres_expected: "~10"

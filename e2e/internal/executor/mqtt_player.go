@@ -113,6 +113,47 @@ func (p *MQTTPlayer) PublishEvent(event scenario.SensorEvent) error {
 	return nil
 }
 
+// PublishContextEvent publishes context messages (occupancy, lighting, etc)
+func (p *MQTTPlayer) PublishContextEvent(eventType, location string, data map[string]interface{}) error {
+	// Context events use: automation/context/{type}/{location}
+	topic := fmt.Sprintf("automation/context/%s/%s", eventType, location)
+
+	payloadBytes, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	token := p.client.Publish(topic, 1, false, payloadBytes)
+	token.Wait()
+	if token.Error() != nil {
+		return fmt.Errorf("failed to publish to %s: %w", topic, token.Error())
+	}
+
+	p.logger.Printf("Published context event to %s: %s", topic, string(payloadBytes))
+	return nil
+}
+
+// PublishMediaEvent publishes media events (play, pause, stop)
+func (p *MQTTPlayer) PublishMediaEvent(location string, data map[string]interface{}) error {
+	// Media events use: automation/media/{action}/{location}
+	action := data["state"].(string) // playing, paused, stopped
+	topic := fmt.Sprintf("automation/media/%s/%s", action, location)
+
+	payloadBytes, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	token := p.client.Publish(topic, 1, false, payloadBytes)
+	token.Wait()
+	if token.Error() != nil {
+		return fmt.Errorf("failed to publish to %s: %w", topic, token.Error())
+	}
+
+	p.logger.Printf("Published media event to %s: %s", topic, string(payloadBytes))
+	return nil
+}
+
 // Close disconnects from MQTT broker
 func (p *MQTTPlayer) Close() {
 	if p.client != nil && p.client.IsConnected() {

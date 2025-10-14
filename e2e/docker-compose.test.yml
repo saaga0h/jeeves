@@ -24,6 +24,28 @@ services:
       timeout: 3s
       retries: 5
 
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: jeeves-test-postgres
+    environment:
+      POSTGRES_DB: jeeves_behavior
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: jeeves
+      POSTGRES_PASSWORD: jeeves_test
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jeeves"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      default:
+        aliases:
+          - postgres  # This allows connection via "postgres" hostname
+
   # Agents
   collector:
     build:
@@ -106,6 +128,31 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  behavior-agent:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: behavior-agent
+    container_name: jeeves-test-behavior
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      JEEVES_MQTT_BROKER: "mosquitto"
+      JEEVES_MQTT_PORT: 1883
+      JEEVES_REDIS_HOST: "redis"
+      JEEVES_REDIS_PORT: 6379
+      JEEVES_POSTGRES_HOST: "postgres"
+      JEEVES_POSTGRES_DB: "jeeves_behavior"
+      JEEVES_POSTGRES_USER: "jeeves"
+      JEEVES_POSTGRES_PASSWORD: "jeeves_test"
+      JEEVES_POSTGRES_PORT: 5432
+      JEEVES_LOG_LEVEL: "debug"
+
   # Testing infrastructure
   observer:
     build:
@@ -129,6 +176,7 @@ services:
     environment:
       - MQTT_BROKER=tcp://mosquitto:1883
       - REDIS_HOST=redis:6379
+      - POSTGRES_HOST=postgres:5432
     volumes:
       - ../test-scenarios:/scenarios:ro
       - ./test-output:/output
@@ -137,6 +185,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
       collector:
         condition: service_started
       illuminance-agent:
@@ -144,6 +194,8 @@ services:
       light-agent:
         condition: service_started
       occupancy-agent:
+        condition: service_started
+      behavior-agent:
         condition: service_started
     profiles:
       - test

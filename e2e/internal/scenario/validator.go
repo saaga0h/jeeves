@@ -47,21 +47,32 @@ func validateEvents(events []SensorEvent) error {
 		return fmt.Errorf("at least one event is required")
 	}
 
-	seenTimes := make(map[int]bool)
 	for i, event := range events {
 		if event.Time < 0 {
 			return fmt.Errorf("event %d: time cannot be negative", i)
 		}
 
-		if event.Sensor == "" {
-			return fmt.Errorf("event %d: sensor is required", i)
+		// Must have either Sensor OR (Type + Location)
+		if event.Sensor == "" && (event.Type == "" || event.Location == "") {
+			return fmt.Errorf("event %d: must have either 'sensor' or both 'type' and 'location'", i)
+		}
+
+		if event.Sensor != "" && event.Type != "" {
+			return fmt.Errorf("event %d: cannot specify both 'sensor' and 'type'", i)
 		}
 
 		if event.Description == "" {
 			return fmt.Errorf("event %d: description is required", i)
 		}
 
-		seenTimes[event.Time] = true
+		// Validate value/data based on category
+		category := event.Category()
+		if category == "sensor" && event.Value == nil {
+			return fmt.Errorf("event %d: raw sensor events require 'value'", i)
+		}
+		if (category == "context" || category == "media") && len(event.Data) == 0 {
+			return fmt.Errorf("event %d: context/media events require 'data'", i)
+		}
 	}
 
 	return nil
@@ -96,23 +107,32 @@ func validateExpectations(expectations map[string][]Expectation) error {
 				return fmt.Errorf("layer %s, expectation %d: time cannot be negative", layer, i)
 			}
 
-			if exp.Topic == "" {
-				return fmt.Errorf("layer %s, expectation %d: topic is required", layer, i)
+			if exp.Topic == "" && exp.PostgresQuery == "" {
+				return fmt.Errorf("layer %s, expectation %d: either topic or postgres_query is required", layer, i)
 			}
 
-			// Either payload or redis checks must be present
-			if len(exp.Payload) == 0 && exp.RedisKey == "" {
-				return fmt.Errorf("layer %s, expectation %d: either payload or redis_key must be specified", layer, i)
+			// MQTT expectations: payload or redis checks
+			if exp.Topic != "" {
+				hasPayload := len(exp.Payload) > 0
+				hasRedis := exp.RedisKey != ""
+
+				if !hasPayload && !hasRedis {
+					return fmt.Errorf("layer %s, expectation %d: MQTT expectations require either payload or redis_key", layer, i)
+				}
+
+				if hasRedis {
+					if exp.RedisField == "" {
+						return fmt.Errorf("layer %s, expectation %d: redis_field is required when redis_key is specified", layer, i)
+					}
+					if exp.Expected == "" {
+						return fmt.Errorf("layer %s, expectation %d: expected is required when redis_key is specified", layer, i)
+					}
+				}
 			}
 
-			// If redis checks are present, validate them
-			if exp.RedisKey != "" {
-				if exp.RedisField == "" {
-					return fmt.Errorf("layer %s, expectation %d: redis_field is required when redis_key is specified", layer, i)
-				}
-				if exp.Expected == "" {
-					return fmt.Errorf("layer %s, expectation %d: expected is required when redis_key is specified", layer, i)
-				}
+			// Postgres expectations
+			if exp.PostgresQuery != "" && exp.PostgresExpected == nil {
+				return fmt.Errorf("layer %s, expectation %d: postgres_expected is required when postgres_query is specified", layer, i)
 			}
 		}
 	}

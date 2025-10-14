@@ -28,7 +28,7 @@ docker-compose -f docker-compose.test.yml build
 
 # Start infrastructure and agents
 echo "Starting test environment..."
-docker-compose -f docker-compose.test.yml up -d mosquitto redis collector illuminance-agent light-agent occupancy-agent
+docker-compose -f docker-compose.test.yml up -d mosquitto redis postgres collector illuminance-agent light-agent occupancy-agent behavior-agent
 
 # Wait for services to be ready
 echo "Waiting for services to be ready..."
