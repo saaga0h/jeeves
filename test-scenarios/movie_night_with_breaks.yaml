@@ -1,0 +1,339 @@
+name: "Movie Night - With Breaks"
+description: "90-minute movie with two 5-minute bathroom/snack breaks to test micro-episode creation"
+
+test_mode:
+  virtual_start: "2025-10-14T19:00:00Z"  # Saturday evening
+  time_scale: 60  # 100 minutes compressed to ~1.7 minutes
+
+setup:
+  location: "living_room"
+  initial_state:
+    occupancy: null
+
+events:
+  # === Movie Start (19:00 virtual) ===
+  - time: 0
+    sensor: "motion:living_room"
+    value: true
+    description: "Person enters living room"
+
+  - time: 2
+    type: occupancy
+    location: living_room
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Occupancy detected"
+
+  - time: 5
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 80
+      color_temp: 4000
+      source: "automated"
+    description: "Lights turn on automatically"
+
+  - time: 10
+    type: media
+    location: living_room
+    data:
+      state: "playing"
+      media_type: "video"
+      source: "apple_tv"
+    description: "Start movie"
+
+  - time: 12
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 15
+      color_temp: 2700
+      source: "manual"
+    description: "Person manually dims lights for movie"
+
+  # === First Break - 30 minutes into movie (19:30 virtual) ===
+  - time: 1800  # 30 min * 60 sec = 1800 sec
+    type: media
+    location: living_room
+    data:
+      state: "paused"
+      media_type: "video"
+      source: "apple_tv"
+    description: "Pause movie (bathroom break)"
+
+  - time: 1802
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 60
+      color_temp: 3500
+      source: "manual"
+    description: "Brighten lights during break"
+
+  - time: 1805
+    type: occupancy
+    location: living_room
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Person leaves for bathroom"
+
+  # Person returns after 5 minutes (19:35 virtual)
+  - time: 2100  # 1800 + (5 * 60) = 2100
+    sensor: "motion:living_room"
+    value: true
+    description: "Person returns from bathroom"
+
+  - time: 2102
+    type: occupancy
+    location: living_room
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Occupancy detected again"
+
+  - time: 2105
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 15
+      color_temp: 2700
+      source: "manual"
+    description: "Dim lights again"
+
+  - time: 2110
+    type: media
+    location: living_room
+    data:
+      state: "playing"
+      media_type: "video"
+      source: "apple_tv"
+    description: "Resume movie"
+
+  # === Second Break - 60 minutes into movie (20:00 virtual) ===
+  - time: 3600  # 60 min * 60 sec = 3600 sec
+    type: media
+    location: living_room
+    data:
+      state: "paused"
+      media_type: "video"
+      source: "apple_tv"
+    description: "Pause movie (snack break)"
+
+  - time: 3602
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 60
+      color_temp: 3500
+      source: "manual"
+    description: "Brighten lights during break"
+
+  - time: 3605
+    type: occupancy
+    location: living_room
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Person leaves for kitchen"
+
+  # Person returns after 5 minutes (20:05 virtual)
+  - time: 3900  # 3600 + (5 * 60) = 3900
+    sensor: "motion:living_room"
+    value: true
+    description: "Person returns from kitchen"
+
+  - time: 3902
+    type: occupancy
+    location: living_room
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Occupancy detected again"
+
+  - time: 3905
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 15
+      color_temp: 2700
+      source: "manual"
+    description: "Dim lights again"
+
+  - time: 3910
+    type: media
+    location: living_room
+    data:
+      state: "playing"
+      media_type: "video"
+      source: "apple_tv"
+    description: "Resume movie"
+
+  # === Movie End (20:30 virtual) ===
+  - time: 5400  # 90 min * 60 sec = 5400 sec
+    type: media
+    location: living_room
+    data:
+      state: "stopped"
+      media_type: "video"
+      source: "apple_tv"
+    description: "Movie ends"
+
+  - time: 5402
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 80
+      color_temp: 4000
+      source: "automated"
+    description: "Lights return to normal"
+
+  # === Person Leaves (20:35 virtual) ===
+  - time: 5700  # 95 min * 60 sec = 5700 sec
+    type: occupancy
+    location: living_room
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Person leaves living room"
+
+  - time: 5702
+    type: lighting
+    location: living_room
+    data:
+      state: "off"
+      brightness: 0
+      source: "automated"
+    description: "Lights turn off"
+
+wait:
+  - time: 5720
+    description: "Wait for all processing to complete"
+
+expectations:
+  behavior_events:
+    # Should have multiple episode start/close events
+    - time: 5
+      topic: "automation/behavior/episode/started"
+      payload:
+        location: "living_room"
+      description: "Initial episode starts"
+
+    - time: 1810
+      topic: "automation/behavior/episode/closed"
+      payload:
+        location: "living_room"
+        end_reason: "occupancy_empty"
+      description: "Episode closes during first break"
+
+    - time: 2105
+      topic: "automation/behavior/episode/started"
+      payload:
+        location: "living_room"
+      description: "Episode resumes after first break"
+
+    - time: 3610
+      topic: "automation/behavior/episode/closed"
+      payload:
+        location: "living_room"
+        end_reason: "occupancy_empty"
+      description: "Episode closes during second break"
+
+    - time: 3905
+      topic: "automation/behavior/episode/started"
+      payload:
+        location: "living_room"
+      description: "Episode resumes after second break"
+
+    - time: 5705
+      topic: "automation/behavior/episode/closed"
+      payload:
+        location: "living_room"
+        end_reason: "occupancy_empty"
+      description: "Final episode closes"
+
+  postgres:
+    # Should have created 3 micro-episodes
+    - time: 5720
+      postgres_query: "SELECT COUNT(*) FROM behavioral_episodes WHERE location = 'living_room'"
+      postgres_expected: 3
+      description: "Three micro-episodes created"
+
+    # First micro-episode: 19:00 - 19:30 (30 minutes)
+    - time: 5720
+      postgres_query: |
+        SELECT 
+          EXTRACT(EPOCH FROM (
+            (jsonld->>'jeeves:endedAt')::timestamptz - 
+            (jsonld->>'jeeves:startedAt')::timestamptz
+          ))::int / 60 as duration_minutes
+        FROM behavioral_episodes 
+        WHERE location = 'living_room'
+        ORDER BY started_at_text ASC
+        LIMIT 1
+      postgres_expected: "~30"
+      description: "First episode is ~30 minutes (pre-first-break)"
+
+    # Second micro-episode: 19:35 - 20:00 (25 minutes)
+    - time: 5720
+      postgres_query: |
+        SELECT 
+          EXTRACT(EPOCH FROM (
+            (jsonld->>'jeeves:endedAt')::timestamptz - 
+            (jsonld->>'jeeves:startedAt')::timestamptz
+          ))::int / 60 as duration_minutes
+        FROM behavioral_episodes 
+        WHERE location = 'living_room'
+        ORDER BY started_at_text ASC
+        OFFSET 1
+        LIMIT 1
+      postgres_expected: "~25"
+      description: "Second episode is ~25 minutes (between breaks)"
+
+    # Third micro-episode: 20:05 - 20:35 (30 minutes)
+    - time: 5720
+      postgres_query: |
+        SELECT 
+          EXTRACT(EPOCH FROM (
+            (jsonld->>'jeeves:endedAt')::timestamptz - 
+            (jsonld->>'jeeves:startedAt')::timestamptz
+          ))::int / 60 as duration_minutes
+        FROM behavioral_episodes 
+        WHERE location = 'living_room'
+        ORDER BY started_at_text DESC
+        LIMIT 1
+      postgres_expected: "~30"
+      description: "Third episode is ~30 minutes (post-second-break)"
+
+    - time: 5720
+      postgres_query: |
+        SELECT COUNT(*) 
+        FROM behavioral_episodes 
+        WHERE location = 'living_room'
+          AND started_at_text::timestamptz >= '2025-10-14T19:00:00Z'
+          AND ended_at_text::timestamptz <= '2025-10-14T21:00:00Z'
+      postgres_expected: 3
+      description: "All 3 episodes are in evening time range (19:00-21:00)"
+
+    # Verify timestamps are sequential
+    - time: 5720
+      postgres_query: |
+        SELECT COUNT(*) FROM (
+          SELECT 
+            started_at_text,
+            LAG(ended_at_text) OVER (ORDER BY started_at_text) as prev_end
+          FROM behavioral_episodes
+          WHERE location = 'living_room'
+        ) t
+        WHERE prev_end IS NOT NULL 
+          AND started_at_text::timestamptz > prev_end::timestamptz
+      postgres_expected: 2
+      description: "Episodes are properly separated in time (2 gaps)"
