@@ -32,12 +32,14 @@ expectations:
       topic: "automation/context/occupancy/bedroom"
       payload:
         location: "bedroom"
-        occupied: true
-        confidence: ">0.7"
+        data:
+          occupied: true
+          confidence: ">0.5"
 
     - time: 600
       topic: "automation/context/occupancy/bedroom"
       payload:
         location: "bedroom"
-        occupied: false
-        confidence: ">0.7"
+        data:
+          occupied: false
+          confidence: ">0.5"

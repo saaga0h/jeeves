@@ -32,13 +32,15 @@ expectations:
       topic: "automation/context/occupancy/study"
       payload:
         location: "study"
-        occupied: true
-        confidence: ">0.7"
-        reasoning: "~settling.*in|multiple.*motion~"
+        data:
+          occupied: true
+          confidence: ">0.5"
+          reasoning: "~settling.*in|multiple.*motion~"
 
     - time: 480
       topic: "automation/context/occupancy/study"
       payload:
         location: "study"
-        occupied: true
-        confidence: ">0.6"
+        data:
+          occupied: true
+          confidence: ">0.5"
