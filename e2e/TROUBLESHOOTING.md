@@ -7,7 +7,7 @@
 #### "go: updates to go.mod needed; to update it: go mod tidy"
 **Solution:**
 ```bash
-cd /Users/saaga.helin/projects/jeeves
+cd /path-to-projects/jeeves
 go mod tidy
 ```
 
@@ -124,7 +124,7 @@ make logs SERVICE=collector
 **Cause:** LLM variability or timing sensitivity
 
 **Solutions:**
-1. Use flexible matchers: `">0.6"` instead of exact values
+1. Use flexible matchers: `">0.5"` instead of exact values
 2. Use regex patterns: `"~occupied|likely~"`
 3. Increase wait times before expectations
 4. Run test multiple times to verify consistency
@@ -169,13 +169,13 @@ make logs SERVICE=collector
 #### Scripts can't find files
 **Always run from the e2e directory:**
 ```bash
-cd /Users/saaga.helin/projects/jeeves/e2e
+cd e2e
 ./run-test.sh hallway_passthrough
 ```
 
 Or use absolute paths:
 ```bash
-/Users/saaga.helin/projects/jeeves/e2e/run-test.sh hallway_passthrough
+/path-to-projects/jeeves/e2e/run-test.sh hallway_passthrough
 ```
 
 Or use the Makefile (handles paths automatically):

@@ -255,7 +255,7 @@ environment:
 The occupancy agent uses an LLM for reasoning, which may produce slightly different results across runs.
 
 **Mitigation:**
-- Use confidence thresholds (`">0.7"`)
+- Use confidence thresholds (`">0.5"`)
 - Use regex patterns for reasoning text
 - Run tests multiple times before committing
 
