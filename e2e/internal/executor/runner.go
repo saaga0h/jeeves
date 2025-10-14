@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
@@ -45,11 +46,24 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (*scenario.TestR
 	r.logger.Printf("Starting scenario: %s", s.Name)
 	r.logger.Printf("Description: %s", s.Description)
 
+	// Log test mode if configured
+	if s.TestMode != nil {
+		r.logger.Printf("Test mode enabled: virtual_start=%s, time_scale=%dx",
+			s.TestMode.VirtualStart, s.TestMode.TimeScale)
+	}
+
 	// Initialize connections
 	if err := r.initialize(); err != nil {
 		return nil, nil, fmt.Errorf("initialization failed: %w", err)
 	}
 	defer r.cleanup()
+
+	// Publish test mode configuration to MQTT for agents BEFORE waiting for startup
+	if s.TestMode != nil {
+		if err := r.publishTestMode(s.TestMode); err != nil {
+			return nil, nil, fmt.Errorf("failed to publish test mode: %w", err)
+		}
+	}
 
 	// Wait for agents to start up
 	r.logger.Printf("Waiting 5 seconds for agents to start up...")
@@ -63,9 +77,15 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (*scenario.TestR
 	startTime := time.Now()
 	var timelineEvents []reporter.TimelineEvent
 
+	// Determine time scale for event timing
+	timeScale := 1
+	if s.TestMode != nil {
+		timeScale = s.TestMode.TimeScale
+	}
+
 	// Execute events
 	for _, event := range s.Events {
-		WaitUntil(startTime, event.Time)
+		WaitUntil(startTime, event.Time, timeScale)
 		elapsed := GetElapsed(startTime)
 
 		// Determine event description
@@ -105,7 +125,7 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (*scenario.TestR
 
 	// Execute wait periods
 	for _, wait := range s.Wait {
-		WaitUntil(startTime, wait.Time)
+		WaitUntil(startTime, wait.Time, timeScale)
 		elapsed := GetElapsed(startTime)
 
 		r.logger.Printf("[%.2fs] Wait: %s", elapsed, wait.Description)
@@ -137,7 +157,7 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (*scenario.TestR
 	})
 
 	for _, le := range allExpectations {
-		WaitUntil(startTime, le.exp.Time)
+		WaitUntil(startTime, le.exp.Time, timeScale)
 		elapsed := GetElapsed(startTime)
 
 		var checkDesc string
@@ -295,4 +315,31 @@ func (r *Runner) SaveCapture(filename string) error {
 		return fmt.Errorf("observer not initialized")
 	}
 	return r.observer.SaveCapture(filename)
+}
+
+// publishTestMode publishes test mode configuration to MQTT for agents
+func (r *Runner) publishTestMode(tm *scenario.TestModeConfig) error {
+	topic := "automation/test/time_config"
+
+	payload := map[string]interface{}{
+		"virtual_start": tm.VirtualStart,
+		"time_scale":    tm.TimeScale,
+		"test_mode":     true,
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal test mode config: %w", err)
+	}
+
+	if err := r.player.Publish(topic, 1, true, payloadBytes); err != nil {
+		return fmt.Errorf("failed to publish test mode config: %w", err)
+	}
+
+	r.logger.Printf("Published test mode configuration to %s", topic)
+
+	// Give agents time to receive and process configuration
+	time.Sleep(1 * time.Second)
+
+	return nil
 }

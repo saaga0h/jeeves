@@ -23,6 +23,7 @@ type Agent struct {
 	cfg    *config.Config
 	logger *slog.Logger
 
+	timeManager        *TimeManager      // NEW
 	activeEpisodes     map[string]string // location → episode ID
 	lastOccupancyState map[string]string // location → "occupied" | "empty"
 	stateMux           sync.RWMutex
@@ -47,6 +48,7 @@ func NewAgent(mqttClient mqtt.Client, redisClient redis.Client, cfg *config.Conf
 		db:                 db,
 		cfg:                cfg,
 		logger:             logger,
+		timeManager:        NewTimeManager(logger), // NEW
 		activeEpisodes:     make(map[string]string),
 		lastOccupancyState: make(map[string]string),
 	}, nil
@@ -58,6 +60,12 @@ func (a *Agent) Start(ctx context.Context) error {
 	// Connect to MQTT
 	if err := a.mqtt.Connect(ctx); err != nil {
 		return fmt.Errorf("failed to connect to MQTT: %w", err)
+	}
+
+	// NEW: Subscribe to test mode configuration
+	if err := a.timeManager.ConfigureFromMQTT(a.mqtt); err != nil {
+		a.logger.Warn("Failed to subscribe to test mode config", "error", err)
+		// Not fatal - continue without test mode support
 	}
 
 	// Subscribe to context topics
@@ -101,7 +109,6 @@ func (a *Agent) handleMessage(msg mqtt.Message) {
 
 func (a *Agent) handleOccupancyMessage(msg mqtt.Message) {
 	var data struct {
-		Location   string  `json:"location"`
 		State      string  `json:"state"`
 		Confidence float64 `json:"confidence"`
 	}
@@ -111,26 +118,36 @@ func (a *Agent) handleOccupancyMessage(msg mqtt.Message) {
 		return
 	}
 
+	// Extract location from topic: automation/context/occupancy/{location}
+	parts := strings.Split(msg.Topic(), "/")
+	if len(parts) < 4 {
+		a.logger.Error("Invalid occupancy topic format", "topic", msg.Topic())
+		return
+	}
+	location := parts[3]
+
 	a.stateMux.Lock()
 	defer a.stateMux.Unlock()
 
-	previousState := a.lastOccupancyState[data.Location]
+	previousState := a.lastOccupancyState[location]
 	currentState := data.State
 
-	a.lastOccupancyState[data.Location] = currentState
+	a.lastOccupancyState[location] = currentState
 
 	// Detect transitions
 	if previousState != "occupied" && currentState == "occupied" {
-		a.startEpisode(data.Location)
+		a.startEpisode(location)
 	}
 
 	if previousState == "occupied" && currentState == "empty" {
-		a.endEpisode(data.Location, "occupancy_empty")
+		a.endEpisode(location, "occupancy_empty")
 	}
 }
 
 func (a *Agent) startEpisode(location string) {
-	// Create minimal episode
+	now := a.timeManager.Now() // Changed from time.Now()
+
+	// Create episode with virtual time
 	episode := ontology.NewEpisode(
 		ontology.Activity{
 			Type: "adl:Present",
@@ -142,6 +159,9 @@ func (a *Agent) startEpisode(location string) {
 			Name: location,
 		},
 	)
+
+	// Override the timestamp with virtual time
+	episode.StartedAt = now
 
 	// Store in Postgres
 	jsonld, _ := json.Marshal(episode)
@@ -173,7 +193,8 @@ func (a *Agent) endEpisode(location string, reason string) {
 		return
 	}
 
-	now := time.Now()
+	now := a.timeManager.Now() // Changed from time.Now()
+
 	_, err := a.db.Exec(
 		"UPDATE behavioral_episodes SET jsonld = jsonb_set(jsonld, '{jeeves:endedAt}', to_jsonb($1::text)) WHERE id = $2",
 		now.Format(time.RFC3339),

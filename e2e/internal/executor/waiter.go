@@ -4,9 +4,15 @@ import (
 	"time"
 )
 
-// WaitUntil waits until a specific time relative to start
-func WaitUntil(startTime time.Time, targetSeconds int) {
-	targetTime := startTime.Add(time.Duration(targetSeconds) * time.Second)
+// WaitUntil waits until a specific time relative to start, with optional time scaling
+func WaitUntil(startTime time.Time, targetSeconds int, timeScale int) {
+	if timeScale < 1 {
+		timeScale = 1 // Default to no scaling
+	}
+
+	// Scale the target time
+	scaledSeconds := targetSeconds / timeScale
+	targetTime := startTime.Add(time.Duration(scaledSeconds) * time.Second)
 	now := time.Now()
 
 	if now.Before(targetTime) {

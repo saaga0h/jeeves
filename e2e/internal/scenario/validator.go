@@ -3,6 +3,7 @@ package scenario
 import (
 	"fmt"
 	"sort"
+	"time"
 )
 
 // ValidateScenario performs validation checks on a loaded scenario
@@ -32,6 +33,11 @@ func ValidateScenario(s *Scenario) error {
 	// Validate expectations
 	if err := validateExpectations(s.Expectations); err != nil {
 		return fmt.Errorf("expectations validation failed: %w", err)
+	}
+
+	// Validate test mode configuration
+	if err := validateTestMode(s.TestMode); err != nil {
+		return fmt.Errorf("test_mode validation failed: %w", err)
 	}
 
 	// Validate timing consistency
@@ -181,6 +187,30 @@ func validateTimingConsistency(s *Scenario) error {
 	// Warn if expectations come before events (but don't fail - might be intentional)
 	if minExpectationTime < maxEventTime {
 		// This is actually okay - expectations can be checked at any time
+	}
+
+	return nil
+}
+
+func validateTestMode(tm *TestModeConfig) error {
+	if tm == nil {
+		return nil // test_mode is optional
+	}
+
+	if tm.VirtualStart != "" {
+		// Validate ISO 8601 format
+		if _, err := time.Parse(time.RFC3339, tm.VirtualStart); err != nil {
+			return fmt.Errorf("virtual_start must be valid ISO 8601 timestamp: %w", err)
+		}
+	}
+
+	if tm.TimeScale < 1 {
+		return fmt.Errorf("time_scale must be >= 1 (got %d)", tm.TimeScale)
+	}
+
+	// If time_scale is set, virtual_start should also be set
+	if tm.TimeScale > 1 && tm.VirtualStart == "" {
+		return fmt.Errorf("virtual_start is required when time_scale is set")
 	}
 
 	return nil

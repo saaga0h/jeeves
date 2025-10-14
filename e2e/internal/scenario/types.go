@@ -7,9 +7,16 @@ type Scenario struct {
 	Name         string                   `yaml:"name"`
 	Description  string                   `yaml:"description"`
 	Setup        SetupConfig              `yaml:"setup"`
+	TestMode     *TestModeConfig          `yaml:"test_mode,omitempty"` // Optional virtual time configuration
 	Events       []SensorEvent            `yaml:"events"`
 	Wait         []WaitPeriod             `yaml:"wait"`
 	Expectations map[string][]Expectation `yaml:"expectations"`
+}
+
+// TestModeConfig configures virtual time for testing long-duration scenarios
+type TestModeConfig struct {
+	VirtualStart string `yaml:"virtual_start"` // ISO 8601 timestamp, e.g., "2025-10-14T19:00:00Z"
+	TimeScale    int    `yaml:"time_scale"`    // Acceleration factor, e.g., 60 means 60x faster
 }
 
 // SetupConfig defines the initial state for a test scenario

@@ -154,6 +154,22 @@ func (p *MQTTPlayer) PublishMediaEvent(location string, data map[string]interfac
 	return nil
 }
 
+// Publish publishes a raw message to the specified topic
+func (p *MQTTPlayer) Publish(topic string, qos byte, retain bool, payload []byte) error {
+	if !p.client.IsConnected() {
+		return fmt.Errorf("MQTT client not connected")
+	}
+
+	token := p.client.Publish(topic, qos, retain, payload)
+	token.Wait()
+	if token.Error() != nil {
+		return fmt.Errorf("failed to publish to %s: %w", topic, token.Error())
+	}
+
+	p.logger.Printf("Published to %s: %s", topic, string(payload))
+	return nil
+}
+
 // Close disconnects from MQTT broker
 func (p *MQTTPlayer) Close() {
 	if p.client != nil && p.client.IsConnected() {
