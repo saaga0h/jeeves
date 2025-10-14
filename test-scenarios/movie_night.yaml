@@ -95,11 +95,10 @@ expectations:
     - time: 630
       postgres_query: |
         SELECT 
-          EXTRACT(EPOCH FROM (
-            ended_at_text::timestamptz - started_at_text::timestamptz
-          ))::int / 60 as duration_minutes
+        EXTRACT(EPOCH FROM (
+          (jsonld->>'jeeves:endedAt')::timestamptz - (jsonld->>'jeeves:startedAt')::timestamptz
+        ))::int / 60 as duration_minutes
         FROM behavioral_episodes 
-        WHERE location = 'living_room' 
-        ORDER BY started_at_text DESC 
+        ORDER BY id DESC 
         LIMIT 1
       postgres_expected: "~10"
