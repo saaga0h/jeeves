@@ -57,11 +57,43 @@ func (p *MQTTPlayer) PublishEvent(event scenario.SensorEvent) error {
 	// Build topic following J.E.E.V.E.S. spec: automation/raw/{type}/{location}
 	topic := fmt.Sprintf("automation/raw/%s/%s", sensorType, location)
 
-	// Build payload
-	payload := map[string]interface{}{
-		"sensorType": sensorType,
-		"location":   location,
-		"value":      event.Value,
+	// Build payload following collector expectations (message-examples.md)
+	var payload map[string]interface{}
+
+	if sensorType == "motion" {
+		// Motion sensors send "state" field ("on" or "off"), not "value"
+		state := "off"
+		if boolValue, ok := event.Value.(bool); ok && boolValue {
+			state = "on"
+		}
+
+		payload = map[string]interface{}{
+			"data": map[string]interface{}{
+				"state":     state,
+				"entity_id": fmt.Sprintf("motion.%s", location),
+				"sequence":  1,
+			},
+		}
+	} else if sensorType == "temperature" || sensorType == "illuminance" {
+		// Environmental sensors send numeric "value" and "unit"
+		unit := "°C"
+		if sensorType == "illuminance" {
+			unit = "lux"
+		}
+
+		payload = map[string]interface{}{
+			"data": map[string]interface{}{
+				"value": event.Value,
+				"unit":  unit,
+			},
+		}
+	} else {
+		// Generic sensors - use simple structure
+		payload = map[string]interface{}{
+			"data": map[string]interface{}{
+				"value": event.Value,
+			},
+		}
 	}
 
 	payloadBytes, err := json.Marshal(payload)
