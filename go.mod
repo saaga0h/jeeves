@@ -4,6 +4,8 @@ go 1.24.0
 
 require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
+	github.com/google/uuid v1.6.0
+	github.com/lib/pq v1.10.9
 	github.com/redis/go-redis/v9 v9.14.0
 	github.com/sixdouglas/suncalc v0.0.0-20250114185126-291b1938b70c
 	github.com/spf13/pflag v1.0.10

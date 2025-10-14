@@ -23,14 +23,21 @@ type Config struct {
 	RedisPassword string
 	RedisDB       int
 
+	// PostgreSQL configuration (for behavior agent)
+	PostgresHost     string
+	PostgresPort     int
+	PostgresUser     string
+	PostgresPassword string
+	PostgresDB       string
+
 	// Service configuration
 	ServiceName string
 	HealthPort  int
 	LogLevel    string
 
 	// Agent-specific configuration (can be extended by agents)
-	SensorTopics      []string
-	MaxSensorHistory  int
+	SensorTopics          []string
+	MaxSensorHistory      int
 	EnableVictoriaMetrics bool
 	VictoriaMetricsURL    string
 
@@ -57,22 +64,27 @@ type Config struct {
 // NewConfig creates a new Config with default values
 func NewConfig() *Config {
 	return &Config{
-		MQTTBroker:   "localhost",
-		MQTTPort:     1883,
-		MQTTUser:     "",
-		MQTTPassword: "",
-		MQTTClientID: "",
-		RedisHost:    "localhost",
-		RedisPort:    6379,
-		RedisPassword: "",
-		RedisDB:      0,
-		ServiceName:  "jeeves-agent",
-		HealthPort:   8080,
-		LogLevel:     "info",
-		SensorTopics: []string{"automation/raw/+/+"},
-		MaxSensorHistory: 1000,
+		MQTTBroker:            "localhost",
+		MQTTPort:              1883,
+		MQTTUser:              "",
+		MQTTPassword:          "",
+		MQTTClientID:          "",
+		RedisHost:             "localhost",
+		RedisPort:             6379,
+		RedisPassword:         "",
+		RedisDB:               0,
+		PostgresHost:          "localhost",
+		PostgresPort:          5432,
+		PostgresUser:          "postgres",
+		PostgresPassword:      "",
+		PostgresDB:            "postgres",
+		ServiceName:           "jeeves-agent",
+		HealthPort:            8080,
+		LogLevel:              "info",
+		SensorTopics:          []string{"automation/raw/+/+"},
+		MaxSensorHistory:      1000,
 		EnableVictoriaMetrics: false,
-		VictoriaMetricsURL: "",
+		VictoriaMetricsURL:    "",
 		// Illuminance agent defaults (Helsinki coordinates)
 		Latitude:            60.1695,
 		Longitude:           24.9354,
@@ -129,6 +141,25 @@ func (c *Config) LoadFromEnv() {
 		if db, err := strconv.Atoi(v); err == nil {
 			c.RedisDB = db
 		}
+	}
+
+	// PostgreSQL configuration
+	if v := os.Getenv("JEEVES_POSTGRES_HOST"); v != "" {
+		c.PostgresHost = v
+	}
+	if v := os.Getenv("JEEVES_POSTGRES_PORT"); v != "" {
+		if port, err := strconv.Atoi(v); err == nil {
+			c.PostgresPort = port
+		}
+	}
+	if v := os.Getenv("JEEVES_POSTGRES_USER"); v != "" {
+		c.PostgresUser = v
+	}
+	if v := os.Getenv("JEEVES_POSTGRES_PASSWORD"); v != "" {
+		c.PostgresPassword = v
+	}
+	if v := os.Getenv("JEEVES_POSTGRES_DB"); v != "" {
+		c.PostgresDB = v
 	}
 
 	// Service configuration
@@ -242,6 +273,13 @@ func (c *Config) LoadFromFlags() {
 	pflag.StringVar(&c.RedisPassword, "redis-password", c.RedisPassword, "Redis password")
 	pflag.IntVar(&c.RedisDB, "redis-db", c.RedisDB, "Redis database number")
 
+	// PostgreSQL flags
+	pflag.StringVar(&c.PostgresHost, "postgres-host", c.PostgresHost, "PostgreSQL hostname")
+	pflag.IntVar(&c.PostgresPort, "postgres-port", c.PostgresPort, "PostgreSQL port")
+	pflag.StringVar(&c.PostgresUser, "postgres-user", c.PostgresUser, "PostgreSQL username")
+	pflag.StringVar(&c.PostgresPassword, "postgres-password", c.PostgresPassword, "PostgreSQL password")
+	pflag.StringVar(&c.PostgresDB, "postgres-db", c.PostgresDB, "PostgreSQL database name")
+
 	// Service flags
 	pflag.StringVar(&c.ServiceName, "service-name", c.ServiceName, "Service name")
 	pflag.IntVar(&c.HealthPort, "health-port", c.HealthPort, "Health check HTTP port")
@@ -317,4 +355,11 @@ func (c *Config) MQTTAddress() string {
 // RedisAddress returns the full Redis address
 func (c *Config) RedisAddress() string {
 	return fmt.Sprintf("%s:%d", c.RedisHost, c.RedisPort)
+}
+
+// PostgresConnectionString returns a PostgreSQL connection string
+func (c *Config) PostgresConnectionString() string {
+	sslmode := "disable" // Default for local development
+	return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+		c.PostgresHost, c.PostgresPort, c.PostgresUser, c.PostgresPassword, c.PostgresDB, sslmode)
 }

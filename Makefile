@@ -8,7 +8,7 @@ LDFLAGS := -w -s
 PLATFORMS := linux/amd64 linux/arm64
 
 # Agent names
-AGENTS := collector-agent illuminance-agent light-agent occupancy-agent
+AGENTS := collector-agent illuminance-agent light-agent occupancy-agent behavior-agent
 
 .PHONY: all build build-all clean test test-coverage lint fmt deps help
 .PHONY: run-collector run-illuminance run-light run-occupancy install-tools
@@ -95,6 +95,10 @@ run-occupancy:
 	@echo "Running occupancy agent..."
 	$(GO) run ./cmd/occupancy-agent/
 
+run-behavior:
+	@echo "Running behavior agent..."
+	$(GO) run ./cmd/behavior-agent/
+	
 # Install development tools
 install-tools:
 	@echo "Installing development tools..."
