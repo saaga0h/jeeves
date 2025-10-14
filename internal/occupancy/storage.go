@@ -66,22 +66,36 @@ func (s *Storage) GetMotionEventsInWindow(ctx context.Context, location string, 
 func (s *Storage) GetMinutesSinceLastMotion(ctx context.Context, location string, referenceTime time.Time) (float64, error) {
 	key := fmt.Sprintf("meta:motion:%s", location)
 
+	s.logger.Debug("GetMinutesSinceLastMotion: querying metadata",
+		"location", location,
+		"key", key)
+
 	// Get last motion time from metadata hash
 	lastMotionStr, err := s.redis.HGet(ctx, key, "lastMotionTime")
 	if err != nil {
 		// No motion history
+		s.logger.Debug("GetMinutesSinceLastMotion: no metadata found, returning 999.0",
+			"location", location,
+			"error", err)
 		return 999.0, nil
 	}
 
 	// Parse timestamp
 	lastMotionMs, err := strconv.ParseInt(lastMotionStr, 10, 64)
 	if err != nil {
-		s.logger.Warn("Failed to parse last motion time", "location", location, "error", err)
+		s.logger.Warn("GetMinutesSinceLastMotion: failed to parse lastMotionTime, returning 999.0",
+			"location", location,
+			"value", lastMotionStr,
+			"error", err)
 		return 999.0, nil
 	}
 
 	lastMotionTime := time.UnixMilli(lastMotionMs)
 	minutesSince := referenceTime.Sub(lastMotionTime).Minutes()
+
+	s.logger.Debug("GetMinutesSinceLastMotion: calculated from metadata",
+		"location", location,
+		"minutes_since", fmt.Sprintf("%.2f", minutesSince))
 
 	return minutesSince, nil
 }

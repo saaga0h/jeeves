@@ -258,6 +258,11 @@ func (a *Agent) handleTrigger(msg mqtt.Message) {
 func (a *Agent) analyzeLocation(ctx context.Context, location string, method string) {
 	now := time.Now()
 
+	a.logger.Info("analyzeLocation: STARTING analysis",
+		"location", location,
+		"method", method,
+		"timestamp", now.Format(time.RFC3339))
+
 	// Generate temporal abstraction
 	abstraction, err := GenerateTemporalAbstraction(ctx, location, a.storage, now)
 	if err != nil {
@@ -286,7 +291,7 @@ func (a *Agent) analyzeLocation(ctx context.Context, location string, method str
 	// Analyze with LLM (with fallback)
 	result := AnalyzeWithFallback(ctx, location, abstraction, stabilization, a.cfg, a.logger)
 
-	a.logger.Debug("Analysis complete",
+	a.logger.Info("analyzeLocation: Analysis complete",
 		"location", location,
 		"occupied", result.Occupied,
 		"confidence", result.Confidence,
@@ -299,6 +304,13 @@ func (a *Agent) analyzeLocation(ctx context.Context, location string, method str
 		result,
 		stabilization,
 	)
+
+	a.logger.Info("analyzeLocation: Gate decision",
+		"location", location,
+		"should_update", shouldUpdate,
+		"current_occupancy", state.CurrentOccupancy,
+		"new_occupied", result.Occupied,
+		"confidence", result.Confidence)
 
 	if shouldUpdate {
 		// Create prediction record
