@@ -23,10 +23,23 @@ func shouldMergeEpisodes(ep1, ep2 *MicroEpisode, maxGapMinutes int) bool {
 		return false
 	}
 
+	// CRITICAL: Don't merge episodes longer than 6 hours - likely spurious
+	ep1Duration := ep1.EndedAt.Sub(ep1.StartedAt).Hours()
+	ep2Duration := ep2.EndedAt.Sub(ep2.StartedAt).Hours()
+
+	if ep1Duration > 6 || ep2Duration > 6 {
+		return false // Skip abnormally long episodes
+	}
+
 	// Calculate gap between episodes
 	gapMinutes := ep2.StartedAt.Sub(*ep1.EndedAt).Minutes()
 
 	if gapMinutes > float64(maxGapMinutes) {
+		return false
+	}
+
+	// Don't merge if gap is negative (overlapping) or too small (< 1 min)
+	if gapMinutes < 1 {
 		return false
 	}
 

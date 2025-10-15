@@ -1,0 +1,874 @@
+name: "Full Weekend - Friday Morning to Saturday Night"
+description: "Two-day scenario testing multi-location, multi-day consolidation with various activities"
+
+test_mode:
+  virtual_start: "2025-10-17T08:00:00Z"  # Friday 8 AM
+  time_scale: 360  # 40.5 hours virtual = 6.75 minutes real
+
+setup:
+  location: "universe"
+  initial_state:
+    occupancy: null
+
+events:
+  # ========================================
+  # FRIDAY - Morning Routine (08:00-09:00)
+  # ========================================
+  
+  # Wake up in bedroom
+  - time: 0
+    sensor: "motion:bedroom"
+    value: true
+    description: "Wake up, motion in bedroom"
+
+  - time: 5
+    type: occupancy
+    location: bedroom
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Bedroom occupied"
+
+  - time: 10
+    type: lighting
+    location: bedroom
+    data:
+      state: "on"
+      brightness: 60
+      color_temp: 4000
+      source: "automated"
+    description: "Bedroom lights on"
+
+  # Move to bathroom (skip bathroom as separate location, implicit in bedroom)
+  
+  # Move to kitchen (08:20)
+  - time: 1200  # 20 minutes
+    type: occupancy
+    location: bedroom
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Leave bedroom"
+
+  - time: 1205
+    sensor: "motion:kitchen"
+    value: true
+    description: "Enter kitchen"
+
+  - time: 1207
+    type: occupancy
+    location: kitchen
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Kitchen occupied"
+
+  - time: 1210
+    type: lighting
+    location: kitchen
+    data:
+      state: "on"
+      brightness: 80
+      color_temp: 4000
+      source: "automated"
+    description: "Kitchen lights on"
+
+  # Breakfast prep/cooking (20 minutes in kitchen)
+  
+  # Move to dining room (08:40)
+  - time: 2400  # 40 minutes from start
+    type: occupancy
+    location: kitchen
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Leave kitchen"
+
+  - time: 2405
+    sensor: "motion:dining_room"
+    value: true
+    description: "Enter dining room"
+
+  - time: 2407
+    type: occupancy
+    location: dining_room
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Dining room occupied"
+
+  - time: 2410
+    type: lighting
+    location: dining_room
+    data:
+      state: "on"
+      brightness: 75
+      color_temp: 3500
+      source: "automated"
+    description: "Dining room lights on"
+
+  # Breakfast eating (20 minutes)
+  
+  # Leave dining room (09:00)
+  - time: 3600  # 1 hour from start
+    type: occupancy
+    location: dining_room
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Finish breakfast, leave dining room"
+
+  # ========================================
+  # FRIDAY - Work Morning (09:00-12:00)
+  # ========================================
+  
+  - time: 3610
+    sensor: "motion:study"
+    value: true
+    description: "Enter study for work"
+
+  - time: 3612
+    type: occupancy
+    location: study
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Study occupied"
+
+  - time: 3615
+    type: lighting
+    location: study
+    data:
+      state: "on"
+      brightness: 90
+      color_temp: 5000
+      source: "automated"
+    description: "Study lights on (bright for work)"
+
+  # Work session (3 hours)
+  
+  # ========================================
+  # FRIDAY - Lunch Break (12:00-12:30)
+  # ========================================
+  
+  - time: 14400  # 4 hours = 12:00
+    type: occupancy
+    location: study
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Leave study for lunch"
+
+  - time: 14410
+    sensor: "motion:kitchen"
+    value: true
+    description: "Enter kitchen for lunch prep"
+
+  - time: 14412
+    type: occupancy
+    location: kitchen
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Kitchen occupied"
+
+  # Lunch prep (10 minutes)
+  
+  - time: 15000  # 12:10
+    type: occupancy
+    location: kitchen
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Move to dining room"
+
+  - time: 15005
+    sensor: "motion:dining_room"
+    value: true
+    description: "Enter dining room"
+
+  - time: 15007
+    type: occupancy
+    location: dining_room
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Dining room occupied"
+
+  # Eating lunch (20 minutes)
+  
+  - time: 16200  # 12:30
+    type: occupancy
+    location: dining_room
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Finish lunch"
+
+  # ========================================
+  # FRIDAY - Work Afternoon (12:30-17:00)
+  # ========================================
+  
+  - time: 16210
+    sensor: "motion:study"
+    value: true
+    description: "Return to study"
+
+  - time: 16212
+    type: occupancy
+    location: study
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Study occupied"
+
+  # Work session (4.5 hours)
+  
+  - time: 32400  # 17:00 (9 hours from start)
+    type: occupancy
+    location: study
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Finish work, leave study"
+
+  # ========================================
+  # CONSOLIDATION #1 - Friday Work Day
+  # ========================================
+  
+  - time: 32450
+    type: behavior
+    location: universe
+    data:
+      action: "consolidate"
+      lookback_hours: 12
+    description: "Consolidate Friday work day (morning routine + work + lunch)"
+
+  # ========================================
+  # FRIDAY - Evening Reading (17:00-19:00)
+  # ========================================
+  
+  - time: 32460
+    sensor: "motion:living_room"
+    value: true
+    description: "Enter living room"
+
+  - time: 32462
+    type: occupancy
+    location: living_room
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Living room occupied"
+
+  - time: 32465
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 50
+      color_temp: 3000
+      source: "automated"
+    description: "Warm lighting for reading"
+
+  # Reading session (2 hours)
+  
+  - time: 39600  # 19:00 (11 hours from start)
+    type: occupancy
+    location: living_room
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Leave for concert"
+
+  # ========================================
+  # FRIDAY - Concert Absence (19:00-23:00)
+  # ========================================
+  
+  # 4-hour absence (no events)
+  
+  # ========================================
+  # FRIDAY - Return from Concert (23:00-23:30)
+  # ========================================
+  
+  - time: 54000  # 23:00 (15 hours from start)
+    sensor: "motion:living_room"
+    value: true
+    description: "Return from concert"
+
+  - time: 54002
+    type: occupancy
+    location: living_room
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Living room occupied"
+
+  - time: 54005
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 40
+      color_temp: 2700
+      source: "automated"
+    description: "Dim lights, winding down"
+
+  # Relaxing (30 minutes)
+  
+  - time: 55800  # 23:30
+    type: occupancy
+    location: living_room
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Go to bedroom for sleep"
+
+  # ========================================
+  # CONSOLIDATION #2 - Friday Complete
+  # ========================================
+  
+  - time: 55850
+    type: behavior
+    location: universe
+    data:
+      action: "consolidate"
+      lookback_hours: 16
+    description: "Consolidate Friday evening activities"
+
+  # ========================================
+  # FRIDAY NIGHT - Sleep (23:30-08:00)
+  # ========================================
+  
+  # Skip sleep events (no occupancy tracking during sleep)
+  # Jump to Saturday morning
+  
+  # ========================================
+  # SATURDAY - Morning Routine (08:00-09:00)
+  # ========================================
+  
+  - time: 86400  # Saturday 08:00 (24 hours from start)
+    sensor: "motion:bedroom"
+    value: true
+    description: "Wake up Saturday"
+
+  - time: 86405
+    type: occupancy
+    location: bedroom
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Bedroom occupied"
+
+  - time: 86410
+    type: lighting
+    location: bedroom
+    data:
+      state: "on"
+      brightness: 60
+      color_temp: 4000
+      source: "automated"
+    description: "Bedroom lights on"
+
+  # Morning routine in bedroom (20 min)
+  
+  - time: 87600  # 08:20
+    type: occupancy
+    location: bedroom
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Leave bedroom"
+
+  - time: 87610
+    sensor: "motion:kitchen"
+    value: true
+    description: "Enter kitchen"
+
+  - time: 87612
+    type: occupancy
+    location: kitchen
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Kitchen occupied"
+
+  # Quick breakfast (20 min)
+  
+  - time: 88800  # 08:40
+    type: occupancy
+    location: kitchen
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Leave kitchen"
+
+  - time: 88805
+    sensor: "motion:dining_room"
+    value: true
+    description: "Enter dining room"
+
+  - time: 88807
+    type: occupancy
+    location: dining_room
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Dining room occupied"
+
+  # Breakfast (20 min)
+  
+  - time: 90000  # 09:00 (25 hours from start)
+    type: occupancy
+    location: dining_room
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Leave for shopping"
+
+  # ========================================
+  # SATURDAY - Shopping Absence (09:00-18:00)
+  # ========================================
+  
+  # 9-hour absence (shopping all day)
+  
+  # ========================================
+  # SATURDAY - Return & Dinner Prep (18:00-19:00)
+  # ========================================
+  
+  - time: 122400  # Saturday 18:00 (34 hours from start)
+    sensor: "motion:kitchen"
+    value: true
+    description: "Return from shopping, enter kitchen"
+
+  - time: 122402
+    type: occupancy
+    location: kitchen
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Kitchen occupied"
+
+  - time: 122405
+    type: lighting
+    location: kitchen
+    data:
+      state: "on"
+      brightness: 85
+      color_temp: 4000
+      source: "automated"
+    description: "Kitchen lights on for cooking"
+
+  # Dinner preparation (1 hour)
+  
+  # ========================================
+  # SATURDAY - Dinner (19:00-20:30)
+  # ========================================
+  
+  - time: 126000  # 19:00 (35 hours from start)
+    type: occupancy
+    location: kitchen
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Move to dining room"
+
+  - time: 126005
+    sensor: "motion:dining_room"
+    value: true
+    description: "Enter dining room for dinner"
+
+  - time: 126007
+    type: occupancy
+    location: dining_room
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Dining room occupied"
+
+  - time: 126010
+    type: lighting
+    location: dining_room
+    data:
+      state: "on"
+      brightness: 60
+      color_temp: 3000
+      source: "automated"
+    description: "Warm lighting for dinner"
+
+  # Dinner (1.5 hours - relaxed weekend meal)
+  
+  - time: 131400  # 20:30 (36.5 hours from start)
+    type: occupancy
+    location: dining_room
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Finish dinner"
+
+  # ========================================
+  # CONSOLIDATION #3 - Saturday Day
+  # ========================================
+  
+  - time: 131450
+    type: behavior
+    location: universe
+    data:
+      action: "consolidate"
+      lookback_hours: 24
+    description: "Consolidate Saturday activities"
+
+  # ========================================
+  # SATURDAY - Relaxing (20:30-21:30)
+  # ========================================
+  
+  - time: 131460
+    sensor: "motion:living_room"
+    value: true
+    description: "Move to living room"
+
+  - time: 131462
+    type: occupancy
+    location: living_room
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Living room occupied"
+
+  - time: 131465
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 50
+      color_temp: 3000
+      source: "automated"
+    description: "Relaxing lighting"
+
+  # Relaxing (1 hour)
+  
+  # ========================================
+  # SATURDAY - Late Movie (21:30-00:30) - CROSSES MIDNIGHT
+  # ========================================
+  
+  - time: 135000  # 21:30 (37.5 hours from start)
+    type: media
+    location: living_room
+    data:
+      state: "playing"
+      media_type: "video"
+      source: "apple_tv"
+    description: "Start late movie"
+
+  - time: 135005
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 15
+      color_temp: 2700
+      source: "manual"
+    description: "Dim lights for movie"
+
+  # Movie with one break
+  
+  # Movie pause for bathroom (23:00)
+  - time: 140400  # 23:00 (39 hours from start)
+    type: media
+    location: living_room
+    data:
+      state: "paused"
+      media_type: "video"
+      source: "apple_tv"
+    description: "Pause movie for break"
+
+  - time: 140405
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 50
+      color_temp: 3500
+      source: "manual"
+    description: "Brighten lights during break"
+
+  - time: 140410
+    type: occupancy
+    location: living_room
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Leave for bathroom"
+
+  # Return from break (23:10)
+  - time: 141000  # 23:10
+    sensor: "motion:living_room"
+    value: true
+    description: "Return from break"
+
+  - time: 141002
+    type: occupancy
+    location: living_room
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Living room occupied"
+
+  - time: 141005
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 15
+      color_temp: 2700
+      source: "manual"
+    description: "Dim lights again"
+
+  - time: 141010
+    type: media
+    location: living_room
+    data:
+      state: "playing"
+      media_type: "video"
+      source: "apple_tv"
+    description: "Resume movie"
+
+  # Movie continues past midnight
+  
+  # Movie ends (00:30 Sunday)
+  - time: 145800  # 00:30 (40.5 hours from start)
+    type: media
+    location: living_room
+    data:
+      state: "stopped"
+      media_type: "video"
+      source: "apple_tv"
+    description: "Movie ends after midnight"
+
+  - time: 145805
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 30
+      color_temp: 2700
+      source: "automated"
+    description: "Lights slightly brighter"
+
+  # Clean up and leave (00:35)
+  - time: 146100  # 00:35
+    type: occupancy
+    location: living_room
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Leave living room, go to bed"
+
+  # ========================================
+  # FINAL CONSOLIDATION - Full Weekend
+  # ========================================
+  
+  - time: 146200
+    type: behavior
+    location: universe
+    data:
+      action: "consolidate"
+      lookback_hours: 48
+    description: "Final consolidation covering entire weekend"
+
+wait:
+  - time: 146300
+    description: "Wait for all consolidation to complete"
+
+expectations:
+  behavior_events:
+    # Verify consolidation events published
+    - time: 146250
+      topic: "automation/behavior/consolidation/completed"
+      payload:
+        macro_episodes_created: "3"  # Any number > 0
+
+  postgres:
+    # ========================================
+    # Verify Micro-Episodes Created
+    # ========================================
+    
+    - time: 146300
+      postgres_query: "SELECT COUNT(*) FROM behavioral_episodes"
+      postgres_expected: "21"
+      description: "Multiple micro-episodes created"
+
+    # ========================================
+    # Verify Macro-Episodes
+    # ========================================
+    
+    - time: 146300
+      postgres_query: "SELECT COUNT(*) FROM macro_episodes"
+      postgres_expected: "4"
+      description: "Multiple macro-episodes created"
+
+    # ========================================
+    # Friday Morning Routine (Multi-Location)
+    # ========================================
+    
+    - time: 146300
+      postgres_query: |
+        SELECT array_length(locations, 1) as location_count
+        FROM macro_episodes
+        WHERE start_time >= '2025-10-17T08:00:00Z'
+          AND start_time < '2025-10-17T09:30:00Z'
+        ORDER BY start_time ASC
+        LIMIT 1
+      postgres_expected: "2+"  # Multiple locations (bedroom, kitchen, dining)
+      description: "Morning routine spans multiple locations"
+
+    # ========================================
+    # Work Session Duration
+    # ========================================
+    
+    - time: 146300
+      postgres_query: |
+        SELECT duration_minutes
+        FROM macro_episodes
+        WHERE 'study' = ANY(locations)
+          AND start_time::date = '2025-10-17'
+        ORDER BY duration_minutes DESC
+        LIMIT 1
+      postgres_expected: "~240"  # ~4 hours (longest work session)
+      description: "Work session has realistic duration"
+
+    # ========================================
+    # Lunch is Separate Episode
+    # ========================================
+    
+    - time: 146300
+      postgres_query: |
+        SELECT COUNT(*) 
+        FROM macro_episodes
+        WHERE ('kitchen' = ANY(locations) OR 'dining_room' = ANY(locations))
+          AND start_time >= '2025-10-17T12:00:00Z'
+          AND start_time < '2025-10-17T13:00:00Z'
+      postgres_expected: 1
+      description: "Lunch is separate episode"
+
+    # ========================================
+    # Gap Handling - Reading and Post-Concert Separate
+    # ========================================
+    
+    - time: 146300
+      postgres_query: |
+        SELECT COUNT(*) 
+        FROM macro_episodes
+        WHERE 'living_room' = ANY(locations)
+          AND start_time::date = '2025-10-17'
+          AND start_time >= '2025-10-17T17:00:00Z'
+      postgres_expected: 2
+      description: "Reading and post-concert are separate (4h gap)"
+
+    # ========================================
+    # Cross-Midnight Movie
+    # ========================================
+    
+    - time: 146300
+      postgres_query: |
+        SELECT COUNT(*)
+        FROM macro_episodes
+        WHERE 'living_room' = ANY(locations)
+          AND start_time >= '2025-10-18T21:00:00Z'
+      postgres_expected: 1
+      description: "Late movie episode exists"
+
+    - time: 146300
+      postgres_query: |
+        SELECT duration_minutes
+        FROM macro_episodes
+        WHERE 'living_room' = ANY(locations)
+          AND start_time >= '2025-10-18T21:00:00Z'
+        ORDER BY start_time DESC
+        LIMIT 1
+      postgres_expected: "~175"  # ~3 hours movie (21:30-00:35 with break)
+      description: "Movie duration is ~3 hours"
+
+    # ========================================
+    # Saturday Activities
+    # ========================================
+    
+    - time: 146300
+      postgres_query: |
+        SELECT COUNT(*)
+        FROM macro_episodes
+        WHERE start_time::date = '2025-10-18'
+      postgres_expected: "3+"  # Morning, dinner, movie at minimum
+      description: "Saturday has multiple macro-episodes"
+
+    # ========================================
+    # Semantic Tags
+    # ========================================
+    
+    - time: 146300
+      postgres_query: |
+        SELECT COUNT(*)
+        FROM macro_episodes
+        WHERE 'study' = ANY(semantic_tags)
+      postgres_expected: "1+"
+      description: "Work episodes tagged with 'study'"
+
+    - time: 146300
+      postgres_query: |
+        SELECT COUNT(*)
+        FROM macro_episodes
+        WHERE 'living_room' = ANY(semantic_tags)
+      postgres_expected: "3+"  # Reading, post-concert, movie
+      description: "Living room episodes properly tagged"
+
+    # ========================================
+    # Pattern Types
+    # ========================================
+    
+    - time: 146300
+      postgres_query: |
+        SELECT COUNT(DISTINCT pattern_type)
+        FROM macro_episodes
+      postgres_expected: 1
+      description: "Currently all episodes use same pattern_type (occupancy_transition)"
+
+    # ========================================
+    # Overall Timeline Integrity
+    # ========================================
+    
+    - time: 146300
+      postgres_query: |
+        SELECT COUNT(*) 
+        FROM macro_episodes
+        WHERE start_time >= '2025-10-17T08:00:00Z'
+          AND end_time <= '2025-10-19T01:00:00Z'
+      postgres_expected: "5+"
+      description: "All macro-episodes fall within weekend timeline"
+
+    # ========================================
+    # Verify Date Span
+    # ========================================
+    
+    - time: 146300
+      postgres_query: |
+        SELECT COUNT(DISTINCT start_time::date)
+        FROM macro_episodes
+      postgres_expected: 2
+      description: "Episodes span 2 days (Friday and Saturday)"
+
+    # ========================================
+    # Verify No Overlapping Episodes
+    # ========================================
+    
+    - time: 146300
+      postgres_query: |
+        SELECT COUNT(*) FROM (
+          SELECT 
+            start_time,
+            LAG(end_time) OVER (ORDER BY start_time) as prev_end
+          FROM macro_episodes
+        ) t
+        WHERE prev_end IS NOT NULL 
+          AND start_time < prev_end
+      postgres_expected: 0
+      description: "No overlapping macro-episodes (timeline integrity)"

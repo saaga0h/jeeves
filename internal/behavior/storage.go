@@ -38,34 +38,31 @@ type MacroEpisode struct {
 // getUnconsolidatedEpisodes retrieves episodes that haven't been consolidated
 func (a *Agent) getUnconsolidatedEpisodes(ctx context.Context, sinceTime time.Time, location string) ([]*MicroEpisode, error) {
 	query := `
-		SELECT 
-			id,
-			COALESCE(jsonld->>'jeeves:triggerType', 'occupancy_transition') as trigger_type,
-			(jsonld->>'jeeves:startedAt')::timestamptz as started_at,
-			CASE 
-				WHEN jsonld->>'jeeves:endedAt' IS NOT NULL 
-				THEN (jsonld->>'jeeves:endedAt')::timestamptz 
-				ELSE NULL 
-			END as ended_at,
-			location,
-			COALESCE(jsonld->'jeeves:triggeredAdjustment', '[]'::jsonb) as manual_actions
-		FROM behavioral_episodes
-		WHERE (jsonld->>'jeeves:startedAt')::timestamptz >= $1
-			AND jsonld->>'jeeves:endedAt' IS NOT NULL
-			AND id NOT IN (
-				SELECT UNNEST(micro_episode_ids)
-				FROM macro_episodes
-			)
-	`
+    SELECT 
+        id,
+        COALESCE(jsonld->>'jeeves:triggerType', 'occupancy_transition') as trigger_type,
+        started_at_text::timestamptz as started_at,
+        ended_at_text::timestamptz as ended_at,
+        location,
+        COALESCE(jsonld->'jeeves:triggeredAdjustment', '[]'::jsonb) as manual_actions
+    FROM behavioral_episodes
+    WHERE started_at_text::timestamptz >= $1
+        AND ended_at_text IS NOT NULL
+        AND NOT EXISTS (
+            SELECT 1 
+            FROM macro_episodes m
+            WHERE behavioral_episodes.id = ANY(m.micro_episode_ids)
+        )
+`
 
 	args := []interface{}{sinceTime}
 
-	if location != "" {
+	if location != "" && location != "universe" {
 		query += " AND location = $2"
 		args = append(args, location)
 	}
 
-	query += " ORDER BY (jsonld->>'jeeves:startedAt')::timestamptz ASC"
+	query += " ORDER BY started_at_text ASC"
 
 	rows, err := a.pgClient.Query(ctx, query, args...)
 	if err != nil {
