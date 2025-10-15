@@ -1050,9 +1050,19 @@ type Agent struct {
     cfg    *config.Config
     logger *slog.Logger
 
+    timeManager        *TimeManager      // Virtual time support for E2E testing
     activeEpisodes     map[string]string // location → episode ID
     lastOccupancyState map[string]string // location → "occupied" | "empty"
     stateMux           sync.RWMutex
+}
+
+// TimeManager handles virtual time for testing scenarios
+type TimeManager struct {
+    virtualTimeEnabled bool
+    virtualStartTime   time.Time
+    testStartTime      time.Time
+    timeScale          float64
+    mutex              sync.RWMutex
 }
 
 // BehavioralEpisode is stored as JSON-LD in Postgres
@@ -1077,6 +1087,7 @@ type BehavioralEpisode struct {
 | **Subscribe** | `automation/context/occupancy/+` | Occupancy state changes | `automation/context/occupancy/living_room` |
 | **Subscribe** | `automation/context/lighting/+` | Lighting state changes | `automation/context/lighting/living_room` |
 | **Subscribe** | `automation/media/+/+` | Media playback events | `automation/media/playing/living_room` |
+| **Subscribe** | `automation/test/time_config` | Virtual time configuration for E2E testing | Test time setup |
 | **Publish** | `automation/behavior/episode/started` | Episode started | Episode beginning detected |
 | **Publish** | `automation/behavior/episode/closed` | Episode ended | Episode closed with reason |
 
@@ -1137,6 +1148,7 @@ CREATE INDEX idx_episodes_jsonld ON behavioral_episodes USING gin(jsonld);
 
 2. Agent starts episode:
    - Creates BehavioralEpisode with UUID
+   - Uses timeManager.Now() for virtual or real timestamp
    - Stores in Postgres: INSERT INTO behavioral_episodes (jsonld) VALUES (...)
    - Publishes started event
 
@@ -1158,6 +1170,7 @@ CREATE INDEX idx_episodes_jsonld ON behavioral_episodes USING gin(jsonld);
    }
 
 6. Agent ends episode:
+   - Uses timeManager.Now() for end timestamp
    - Updates episode: UPDATE behavioral_episodes SET jsonld = jsonb_set(...)
    - Publishes closed event
 
@@ -1168,6 +1181,81 @@ CREATE INDEX idx_episodes_jsonld ON behavioral_episodes USING gin(jsonld);
      "end_reason": "occupancy_empty"
    }
 ```
+
+### Virtual Time Support
+
+The Behavior Agent supports **virtual time compression** for E2E testing, allowing long scenarios (like 90-minute movies) to run in minutes while maintaining realistic timestamps in the database.
+
+#### Time Manager Integration
+
+```go
+// TimeManager provides dual-mode time handling
+func (tm *TimeManager) Now() time.Time {
+    tm.mutex.RLock()
+    defer tm.mutex.RUnlock()
+    
+    if !tm.virtualTimeEnabled {
+        return time.Now()  // Real time mode
+    }
+    
+    // Virtual time calculation
+    elapsed := time.Since(tm.testStartTime)
+    virtualElapsed := time.Duration(float64(elapsed) * tm.timeScale)
+    return tm.virtualStartTime.Add(virtualElapsed)
+}
+
+// Agent uses virtual time for episode timestamps
+func (a *Agent) startEpisode(location string) {
+    episode := &BehavioralEpisode{
+        ID:        generateUUID(),
+        Location:  location,
+        StartedAt: a.timeManager.Now(),  // Virtual time if testing
+        Events:    make([]interface{}, 0),
+    }
+    
+    // Store in Postgres with virtual timestamp
+    a.storeEpisode(episode)
+}
+```
+
+#### Time Configuration via MQTT
+
+The agent subscribes to `automation/test/time_config` for test setup:
+
+```json
+{
+  "virtual_start": "2024-12-19T20:00:00Z",
+  "time_scale": 60,
+  "test_start_time": "2024-12-19T10:30:15Z"
+}
+```
+
+This configuration enables:
+- **virtual_start**: The simulated "real" time when the scenario begins
+- **time_scale**: Time acceleration factor (60x = 1 real second = 60 virtual seconds)  
+- **test_start_time**: When the test actually started (for elapsed calculation)
+
+#### Database Consistency
+
+With virtual time enabled, database timestamps reflect the scenario's logical time:
+
+```sql
+-- Virtual 90-minute movie scenario compressed to 1.5 minutes
+SELECT 
+  (jsonld->>'jeeves:startedAt')::timestamptz as start_time,
+  (jsonld->>'jeeves:endedAt')::timestamptz as end_time,
+  EXTRACT(EPOCH FROM (
+    (jsonld->>'jeeves:endedAt')::timestamptz - 
+    (jsonld->>'jeeves:startedAt')::timestamptz
+  ))::int / 60 as duration_minutes
+FROM behavioral_episodes 
+WHERE location = 'living_room'
+ORDER BY id DESC LIMIT 1;
+
+-- Result shows virtual duration (~90 minutes), not real test time (~1.5 minutes)
+```
+
+This ensures episode data appears realistic for future behavioral analysis while enabling fast test execution.
 
 ### Ontology Standards
 
@@ -1253,15 +1341,18 @@ JEEVES_POSTGRES_PASSWORD=secret
 
 ### Current Limitations
 
-This is a **stub implementation** for E2E testing infrastructure. Currently implemented:
-- ✅ Episode start/end based on occupancy
+This implementation provides core episode tracking with **virtual time support for E2E testing**. Currently implemented:
+- ✅ Episode start/end based on occupancy  
 - ✅ Postgres storage with JSON-LD
 - ✅ Episode lifecycle events published
-- ✅ Basic ontology structure
+- ✅ Ontology structure with semantic standards
+- ✅ Virtual time support via TimeManager
+- ✅ MQTT time configuration subscription
+- ✅ Realistic timestamps in database for compressed test scenarios
 
 **Not yet implemented**:
 - ❌ Lighting event tracking (handler is stub)
-- ❌ Media event tracking (handler is stub)
+- ❌ Media event tracking (handler is stub)  
 - ❌ Activity inference from patterns
 - ❌ Episode querying and analysis
 - ❌ Integration with learning/prediction systems
@@ -1272,8 +1363,8 @@ This is a **stub implementation** for E2E testing infrastructure. Currently impl
 
 | Aspect | Collector | Occupancy | Illuminance | Light | Behavior |
 |--------|-----------|-----------|-------------|-------|----------|
-| **Complexity** | Low | High | Medium | Medium | Low (Stub) |
-| **LOC** | ~400 | ~3,300 | ~800 | ~1,200 | ~210 |
+| **Complexity** | Low | High | Medium | Medium | Medium |
+| **LOC** | ~400 | ~3,300 | ~800 | ~1,200 | ~400 |
 | **Latency** | < 10ms | 1-5s (LLM) | < 50ms | < 100ms | < 50ms |
 | **CPU** | ~50 MHz | ~100 MHz | ~50 MHz | ~100 MHz | ~50 MHz |
 | **Memory** | ~128 MB | ~128 MB | ~128 MB | ~128 MB | ~128 MB |
@@ -1282,6 +1373,7 @@ This is a **stub implementation** for E2E testing infrastructure. Currently impl
 | **State Storage** | None | Redis (history, state, predictions) | Redis (history) | Redis (overrides) | Postgres (episodes) |
 | **Publish Rate** | Every event | On state change | On label change | On decision | On episode boundary |
 | **Critical Path** | Yes | Yes | No | Yes | No |
+| **Virtual Time** | No | No | No | No | ✅ Yes |
 
 ### Complexity Drivers
 

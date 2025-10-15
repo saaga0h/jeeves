@@ -1018,3 +1018,326 @@ expectations:
 ```
 
 This keeps complexity in the framework (write once) and scenarios simple (YAML declarations).
+
+## Virtual Time for Long Scenarios
+
+For testing long-duration scenarios (movies, work sessions) without waiting hours, the E2E framework supports **virtual time compression**. This allows a 90-minute movie scenario to run in 1.5 minutes while maintaining realistic agent behavior.
+
+### How Virtual Time Works
+
+The framework operates with two time domains:
+
+1. **Real Time**: Actual clock time for test execution (compressed)
+2. **Virtual Time**: Simulated time that agents perceive (full duration)
+
+Virtual time is achieved through:
+- **Time Scale Factor**: Real seconds × scale = virtual seconds (e.g., 60x acceleration)
+- **MQTT Time Configuration**: Published to `automation/test/time_config`
+- **Agent Integration**: Agents subscribe to time config and use virtual timestamps
+- **Database Consistency**: All stored timestamps reflect virtual time, not compressed test time
+
+### Configuration in Scenarios
+
+Add a `test_mode` section to enable virtual time:
+
+```yaml
+# test-scenarios/movie_night.yaml
+name: "Movie Night - Virtual Time"
+description: "90-minute movie compressed to 1.5 minutes"
+
+# Virtual time configuration
+test_mode:
+  enabled: true
+  virtual_start: "2024-12-19T20:00:00Z"    # When the scenario "virtually" starts
+  time_scale: 60                           # 1 real second = 60 virtual seconds
+  # This means 90 virtual minutes = 1.5 real minutes
+
+setup:
+  location: "living_room"
+  initial_state:
+    occupancy: null
+
+events:
+  # Events use virtual time offsets
+  - time: 0
+    sensor: "motion:living_room"
+    value: true
+    description: "Person enters at virtual 8:00 PM"
+
+  - time: 60                               # 1 virtual minute
+    type: media
+    location: living_room
+    data:
+      state: "playing"
+      media_type: "video"
+    description: "Movie starts at virtual 8:01 PM"
+
+  # Periodic motion to maintain occupancy
+  - time: 600                              # 10 virtual minutes
+    sensor: "motion:living_room"
+    value: true
+    description: "Small movement during movie"
+
+  - time: 1800                             # 30 virtual minutes
+    sensor: "motion:living_room"
+    value: true
+    description: "Shift position during movie"
+
+  - time: 3600                             # 60 virtual minutes
+    sensor: "motion:living_room"
+    value: true
+    description: "Bathroom break motion"
+
+  - time: 5400                             # 90 virtual minutes (movie ends)
+    type: media
+    location: living_room
+    data:
+      state: "stopped"
+    description: "Movie ends at virtual 9:30 PM"
+
+  - time: 5460                             # 91 virtual minutes
+    type: occupancy
+    location: living_room
+    data:
+      state: "empty"
+    description: "Person leaves at virtual 9:31 PM"
+
+expectations:
+  behavior_events:
+    - time: 60
+      topic: "automation/behavior/episode/started"
+      payload:
+        location: "living_room"
+
+    - time: 5470
+      topic: "automation/behavior/episode/closed"
+      payload:
+        location: "living_room"
+
+  # Database should show realistic virtual timestamps
+  postgres:
+    - time: 5480
+      postgres_query: |
+        SELECT 
+          (jsonld->>'jeeves:startedAt')::timestamptz as start_time,
+          (jsonld->>'jeeves:endedAt')::timestamptz as end_time,
+          EXTRACT(EPOCH FROM (
+            (jsonld->>'jeeves:endedAt')::timestamptz - 
+            (jsonld->>'jeeves:startedAt')::timestamptz
+          ))::int / 60 as duration_minutes
+        FROM behavioral_episodes 
+        WHERE location = 'living_room'
+        ORDER BY id DESC LIMIT 1
+      postgres_expected: "~91"               # Should be ~91 virtual minutes
+```
+
+### Agent Integration Example
+
+The Behavior Agent demonstrates virtual time integration:
+
+```go
+// internal/behavior/agent.go
+func (a *Agent) startEpisode(location string) {
+    episode := &BehavioralEpisode{
+        Location:  location,
+        StartedAt: a.timeManager.Now(),  // Uses virtual time if configured
+        Events:    make([]interface{}, 0),
+    }
+    // ... store to database with virtual timestamp
+}
+
+func (a *Agent) endEpisode(location string, reason string) {
+    episode.EndedAt = a.timeManager.Now()  // Virtual time
+    // ... update database
+}
+```
+
+The TimeManager handles both modes transparently:
+
+```go
+// internal/behavior/time_manager.go
+func (tm *TimeManager) Now() time.Time {
+    if !tm.virtualTimeEnabled {
+        return time.Now()  // Real time
+    }
+    
+    elapsed := time.Since(tm.testStartTime)
+    virtualElapsed := time.Duration(float64(elapsed) * tm.timeScale)
+    return tm.virtualStartTime.Add(virtualElapsed)  // Virtual time
+}
+```
+
+### Time Scale Guidelines
+
+Choose time scales based on scenario duration:
+
+| Virtual Duration | Recommended Scale | Real Duration |
+|------------------|-------------------|---------------|
+| 5 minutes        | 5x               | 1 minute      |
+| 30 minutes       | 30x              | 1 minute      |
+| 2 hours          | 60x              | 2 minutes     |
+| 8 hours (workday)| 120x             | 4 minutes     |
+| 24 hours         | 300x             | 4.8 minutes   |
+
+**Maximum recommended scale: 300x** - Higher scales can cause timing issues.
+
+### Test Runner Implementation
+
+The test runner automatically handles virtual time:
+
+```go
+// e2e/internal/executor/runner.go
+func (r *Runner) runScenario(scenario *Scenario) error {
+    // Check if virtual time is enabled
+    if scenario.TestMode != nil && scenario.TestMode.Enabled {
+        // Publish time configuration to agents
+        timeConfig := TimeConfig{
+            VirtualStart: scenario.TestMode.VirtualStart,
+            TimeScale:    scenario.TestMode.TimeScale,
+            TestStartTime: time.Now(),
+        }
+        
+        r.publishTimeConfig(timeConfig)
+        
+        // Use time scaling for event timing
+        for _, event := range scenario.Events {
+            // Convert virtual time to real time
+            realWaitTime := time.Duration(event.Time) * time.Second / time.Duration(scenario.TestMode.TimeScale)
+            time.Sleep(realWaitTime)
+            // ... publish event
+        }
+    } else {
+        // Standard real-time execution
+        // ... normal event timing
+    }
+}
+
+func (r *Runner) publishTimeConfig(config TimeConfig) {
+    payload, _ := json.Marshal(config)
+    r.mqttClient.Publish("automation/test/time_config", 0, false, payload)
+}
+```
+
+### Virtual Time in Database Queries
+
+Postgres expectations automatically use virtual time when checking durations:
+
+```yaml
+expectations:
+  postgres:
+    # This checks virtual duration, not real test duration
+    - time: 5480
+      postgres_query: |
+        SELECT EXTRACT(EPOCH FROM (
+          (jsonld->>'jeeves:endedAt')::timestamptz - 
+          (jsonld->>'jeeves:startedAt')::timestamptz
+        ))::int / 60 as duration_minutes
+        FROM behavioral_episodes 
+        WHERE location = 'living_room'
+        ORDER BY id DESC LIMIT 1
+      postgres_expected: "~91"               # Virtual minutes, not real
+
+    # Check realistic virtual timestamps
+    - time: 5480
+      postgres_query: |
+        SELECT EXTRACT(hour FROM (jsonld->>'jeeves:startedAt')::timestamptz) as start_hour
+        FROM behavioral_episodes 
+        WHERE location = 'living_room'
+        ORDER BY id DESC LIMIT 1
+      postgres_expected: 20                  # Started at virtual 8 PM
+```
+
+### Example Virtual Time Scenarios
+
+#### Workday Scenario (8 hours → 4 minutes)
+
+```yaml
+name: "Full Workday - Compressed"
+description: "8-hour workday in 4 minutes with periodic activity"
+
+test_mode:
+  enabled: true
+  virtual_start: "2024-12-19T09:00:00Z"
+  time_scale: 120
+
+events:
+  - time: 0
+    sensor: "motion:home_office"
+    value: true
+    description: "Start work at 9 AM"
+
+  - time: 7200                             # 2 virtual hours
+    sensor: "motion:home_office"
+    value: true
+    description: "11 AM movement"
+
+  - time: 14400                            # 4 virtual hours  
+    sensor: "motion:home_office"
+    value: true
+    description: "1 PM lunch break"
+
+  - time: 25200                            # 7 virtual hours
+    sensor: "motion:home_office"
+    value: true
+    description: "4 PM afternoon activity"
+
+  - time: 28800                            # 8 virtual hours
+    type: occupancy
+    location: home_office
+    data:
+      state: "empty"
+    description: "End work at 5 PM"
+```
+
+#### Sleep Cycle (8 hours → 2.7 minutes)
+
+```yaml
+name: "Sleep Cycle - Compressed"
+description: "Full night sleep with minimal interruptions"
+
+test_mode:
+  enabled: true
+  virtual_start: "2024-12-19T23:00:00Z"
+  time_scale: 180
+
+events:
+  - time: 0
+    sensor: "motion:bedroom"
+    value: true
+    description: "Go to bed at 11 PM"
+
+  - time: 14400                            # 4 virtual hours
+    sensor: "motion:bedroom"
+    value: true
+    description: "3 AM bathroom break"
+
+  - time: 28800                            # 8 virtual hours
+    sensor: "motion:bedroom"
+    value: true
+    description: "7 AM wake up"
+
+  - time: 29400                            # 8 hours 10 minutes
+    type: occupancy
+    location: bedroom
+    data:
+      state: "empty"
+    description: "Leave bedroom"
+```
+
+### Benefits of Virtual Time
+
+1. **Fast Test Execution**: Long scenarios complete in minutes
+2. **Realistic Behavior**: Agents see proper time progression
+3. **Database Integrity**: Stored timestamps reflect actual scenario timing
+4. **Behavioral Validation**: Can test time-dependent logic (work hours, sleep cycles)
+5. **Compressed Logs**: Debug output shows realistic timestamps, not test time
+
+### Virtual Time Best Practices
+
+1. **Include Periodic Motion**: Add motion events throughout long periods to maintain occupancy
+2. **Realistic Start Times**: Use appropriate `virtual_start` times (evening for movies, morning for work)
+3. **Moderate Scaling**: Keep time scales under 300x for reliability
+4. **Test Both Modes**: Verify scenarios work with and without virtual time
+5. **Document Expected Duration**: Include both virtual and real durations in descriptions
+
+This virtual time system enables comprehensive testing of long-duration scenarios while maintaining the efficiency needed for continuous integration.

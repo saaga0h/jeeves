@@ -9,6 +9,8 @@ Practical guide for building new agents in the J.E.E.V.E.S. platform.
 - [Development Workflow](#development-workflow)
 - [Testing Strategy](#testing-strategy)
 - [Common Patterns](#common-patterns)
+- [PostgreSQL Integration](#postgresql-integration)
+- [Virtual Time Support](#virtual-time-support)
 - [Best Practices](#best-practices)
 - [Deployment](#deployment)
 
@@ -1093,6 +1095,903 @@ JEEVES_POSTGRES_PASSWORD=secret
 **Example**: Behavior Agent uses both:
 - Redis: Recent occupancy/lighting state (via other agents)
 - Postgres: Historical behavioral episodes for pattern learning
+
+### Pattern 7: Virtual Time Support
+
+**For agents that need to support virtual time compression in E2E testing scenarios**:
+
+#### Step 1: Add TimeManager to agent
+
+In your `internal/myagent/agent.go`:
+
+```go
+import (
+	"sync"
+	"time"
+)
+
+// TimeManager handles virtual time for testing scenarios
+type TimeManager struct {
+	virtualTimeEnabled bool
+	virtualStartTime   time.Time
+	testStartTime      time.Time
+	timeScale          float64
+	mutex              sync.RWMutex
+}
+
+type Agent struct {
+	mqtt   mqtt.Client
+	redis  redis.Client
+	cfg    *config.Config
+	logger *slog.Logger
+
+	timeManager *TimeManager  // Virtual time support
+}
+
+func NewAgent(mqttClient mqtt.Client, redisClient redis.Client, cfg *config.Config, logger *slog.Logger) (*Agent, error) {
+	return &Agent{
+		mqtt:        mqttClient,
+		redis:       redisClient,
+		cfg:         cfg,
+		logger:      logger,
+		timeManager: &TimeManager{},
+	}, nil
+}
+```
+
+#### Step 2: Implement time configuration
+
+Subscribe to virtual time configuration and provide time methods:
+
+```go
+// ConfigureFromMQTT configures virtual time from MQTT message
+func (tm *TimeManager) ConfigureFromMQTT(payload []byte) error {
+	tm.mutex.Lock()
+	defer tm.mutex.Unlock()
+
+	var config struct {
+		VirtualStart  string  `json:"virtual_start"`
+		TimeScale     float64 `json:"time_scale"`
+		TestStartTime string  `json:"test_start_time"`
+	}
+
+	if err := json.Unmarshal(payload, &config); err != nil {
+		return fmt.Errorf("failed to unmarshal time config: %w", err)
+	}
+
+	virtualStart, err := time.Parse(time.RFC3339, config.VirtualStart)
+	if err != nil {
+		return fmt.Errorf("invalid virtual_start time: %w", err)
+	}
+
+	testStart, err := time.Parse(time.RFC3339, config.TestStartTime)
+	if err != nil {
+		return fmt.Errorf("invalid test_start_time: %w", err)
+	}
+
+	tm.virtualTimeEnabled = true
+	tm.virtualStartTime = virtualStart
+	tm.testStartTime = testStart
+	tm.timeScale = config.TimeScale
+
+	return nil
+}
+
+// Now returns current time (virtual or real)
+func (tm *TimeManager) Now() time.Time {
+	tm.mutex.RLock()
+	defer tm.mutex.RUnlock()
+
+	if !tm.virtualTimeEnabled {
+		return time.Now()
+	}
+
+	// Calculate virtual time
+	elapsed := time.Since(tm.testStartTime)
+	virtualElapsed := time.Duration(float64(elapsed) * tm.timeScale)
+	return tm.virtualStartTime.Add(virtualElapsed)
+}
+
+// IsVirtualTimeEnabled returns whether virtual time is active
+func (tm *TimeManager) IsVirtualTimeEnabled() bool {
+	tm.mutex.RLock()
+	defer tm.mutex.RUnlock()
+	return tm.virtualTimeEnabled
+}
+```
+
+#### Step 3: Subscribe to time configuration
+
+In your agent's Start method:
+
+```go
+func (a *Agent) Start(ctx context.Context) error {
+	// ... existing MQTT and Redis setup ...
+
+	// Subscribe to time configuration for E2E testing
+	if err := a.mqtt.Subscribe("automation/test/time_config", 0, a.handleTimeConfig); err != nil {
+		a.logger.Warn("Failed to subscribe to time config", "error", err)
+		// Don't fail - time config is optional
+	}
+
+	// Subscribe to your agent's topics
+	topic := "automation/sensor/mytype/+"
+	if err := a.mqtt.Subscribe(topic, 0, a.handleMessage); err != nil {
+		return fmt.Errorf("failed to subscribe to %s: %w", topic, err)
+	}
+
+	// ... rest of agent startup
+}
+
+// Handle virtual time configuration
+func (a *Agent) handleTimeConfig(msg mqtt.Message) {
+	if err := a.timeManager.ConfigureFromMQTT(msg.Payload()); err != nil {
+		a.logger.Error("Failed to configure virtual time", "error", err)
+		return
+	}
+
+	a.logger.Info("Virtual time configured",
+		"enabled", a.timeManager.IsVirtualTimeEnabled())
+}
+```
+
+#### Step 4: Use virtual time for timestamps
+
+Use `timeManager.Now()` instead of `time.Now()` for any stored timestamps:
+
+```go
+// Good: Use virtual time for stored data
+func (a *Agent) processMessage(ctx context.Context, location string, payload []byte) error {
+	timestamp := a.timeManager.Now()  // Virtual or real time
+
+	// Store with virtual timestamp
+	data := ProcessedData{
+		Location:  location,
+		Timestamp: timestamp,
+		// ... other fields
+	}
+
+	if err := a.storage.Store(ctx, data); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Good: Use for episode tracking
+func (a *Agent) startEpisode(location string) {
+	episode := &BehavioralEpisode{
+		ID:        generateUUID(),
+		Location:  location,
+		StartedAt: a.timeManager.Now(),  // Virtual time if testing
+		// ... other fields
+	}
+
+	// Store in database with virtual timestamp
+	a.storeEpisode(episode)
+}
+
+// Bad: Don't use for internal operations
+func (a *Agent) logPerformance() {
+	start := time.Now()  // Use real time for performance timing
+	defer func() {
+		a.logger.Debug("Operation took", "duration", time.Since(start))
+	}()
+}
+```
+
+#### Step 5: Testing with virtual time
+
+E2E tests can now use virtual time configuration:
+
+```yaml
+# test-scenarios/myagent_virtual_time.yaml
+name: "MyAgent Virtual Time Test"
+description: "Test long scenario in compressed time"
+
+# Enable virtual time compression
+test_mode:
+  enabled: true
+  virtual_start: "2024-12-19T14:00:00Z"
+  time_scale: 60  # 1 real second = 60 virtual seconds
+
+events:
+  - time: 0
+    sensor: "mytype:location"
+    value: 123
+    description: "Event at virtual 14:00"
+
+  - time: 3600  # 1 virtual hour later
+    sensor: "mytype:location"
+    value: 456
+    description: "Event at virtual 15:00"
+
+expectations:
+  myagent:
+    - time: 3605
+      topic: "automation/context/mycontext/location"
+      payload:
+        timestamp: "~2024-12-19T15:00"  # Virtual timestamp
+```
+
+#### Virtual Time Best Practices
+
+1. **Always use `timeManager.Now()`** for stored timestamps
+2. **Use `time.Now()`** for internal operations (performance, logging)
+3. **Subscribe to time config early** in agent startup
+4. **Handle time config errors gracefully** (don't fail if unavailable)
+5. **Test both modes** - ensure agent works with and without virtual time
+
+This enables long-duration scenarios (hours) to run in minutes while maintaining realistic timestamps in your data.
+
+---
+
+## PostgreSQL Integration
+
+For agents that need **long-term semantic storage** beyond Redis's 24-hour TTL, PostgreSQL provides robust relational database capabilities with JSON-LD support.
+
+### When to Use PostgreSQL
+
+**Ideal for**:
+- Behavioral episodes and long-term patterns
+- JSON-LD semantic documents 
+- Data requiring ACID guarantees
+- Complex relational queries
+- Analytics and reporting
+
+**Example Use Cases**:
+- User activity episodes (Behavior Agent)
+- Historical energy usage patterns
+- Device health and maintenance records
+- User preference learning data
+
+### Connection Patterns
+
+#### Connection String Configuration
+
+Add to your `pkg/config/config.go`:
+
+```go
+type Config struct {
+    // ... existing fields
+
+    // PostgreSQL configuration
+    PostgresHost     string
+    PostgresPort     int
+    PostgresDB       string
+    PostgresUser     string
+    PostgresPassword string
+    PostgresSSLMode  string
+}
+
+func (c *Config) PostgresConnectionString() string {
+    if c.PostgresHost == "" {
+        return ""  // PostgreSQL optional
+    }
+
+    sslMode := c.PostgresSSLMode
+    if sslMode == "" {
+        sslMode = "disable"  // Default for local development
+    }
+
+    return fmt.Sprintf(
+        "host=%s port=%d dbname=%s user=%s password=%s sslmode=%s",
+        c.PostgresHost,
+        c.PostgresPort,
+        c.PostgresDB,
+        c.PostgresUser,
+        c.PostgresPassword,
+        sslMode,
+    )
+}
+
+func (c *Config) PostgresEnabled() bool {
+    return c.PostgresHost != ""
+}
+```
+
+#### Environment Variables
+
+```bash
+# PostgreSQL configuration (optional for most agents)
+JEEVES_POSTGRES_HOST=postgres.service.consul
+JEEVES_POSTGRES_PORT=5432
+JEEVES_POSTGRES_DB=jeeves_behavior
+JEEVES_POSTGRES_USER=jeeves
+JEEVES_POSTGRES_PASSWORD=secret
+JEEVES_POSTGRES_SSLMODE=require  # For production
+```
+
+#### Connection Pool Setup
+
+```go
+import (
+    "database/sql"
+    "time"
+    _ "github.com/lib/pq"
+)
+
+func initPostgres(cfg *config.Config, logger *slog.Logger) (*sql.DB, error) {
+    if !cfg.PostgresEnabled() {
+        return nil, nil  // PostgreSQL optional
+    }
+
+    db, err := sql.Open("postgres", cfg.PostgresConnectionString())
+    if err != nil {
+        return nil, fmt.Errorf("failed to open postgres: %w", err)
+    }
+
+    // Configure connection pool
+    db.SetMaxOpenConns(5)                   // Max concurrent connections
+    db.SetMaxIdleConns(2)                   // Keep alive for reuse
+    db.SetConnMaxLifetime(30 * time.Minute) // Rotate connections
+
+    // Verify connection
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+
+    if err := db.PingContext(ctx); err != nil {
+        db.Close()
+        return nil, fmt.Errorf("failed to ping postgres: %w", err)
+    }
+
+    logger.Info("Connected to PostgreSQL",
+        "host", cfg.PostgresHost,
+        "database", cfg.PostgresDB)
+
+    return db, nil
+}
+```
+
+### Semantic Storage Guidelines
+
+#### JSON-LD Document Storage
+
+Use JSONB for efficient JSON-LD storage with semantic querying:
+
+```sql
+-- Table for semantic documents
+CREATE TABLE behavioral_episodes (
+    id SERIAL PRIMARY KEY,
+    jsonld JSONB NOT NULL,
+    location TEXT GENERATED ALWAYS AS (jsonld->'adl:activity'->'adl:location'->>'name') STORED,
+    episode_type TEXT GENERATED ALWAYS AS (jsonld->>'@type') STORED,
+    started_at TIMESTAMP GENERATED ALWAYS AS ((jsonld->>'jeeves:startedAt')::timestamptz) STORED,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Indexes for efficient querying
+CREATE INDEX idx_episodes_location ON behavioral_episodes(location);
+CREATE INDEX idx_episodes_type ON behavioral_episodes(episode_type);
+CREATE INDEX idx_episodes_started_at ON behavioral_episodes(started_at);
+CREATE INDEX idx_episodes_jsonld ON behavioral_episodes USING gin(jsonld);
+```
+
+#### Storage Operations
+
+```go
+import (
+    "github.com/saaga0h/jeeves-platform/pkg/ontology"
+)
+
+// Store semantic episode
+func (a *Agent) storeEpisode(episode *ontology.BehavioralEpisode) error {
+    if a.db == nil {
+        return nil  // PostgreSQL optional
+    }
+
+    jsonld, err := json.Marshal(episode)
+    if err != nil {
+        return fmt.Errorf("failed to marshal episode: %w", err)
+    }
+
+    var id string
+    err = a.db.QueryRow(
+        "INSERT INTO behavioral_episodes (jsonld) VALUES ($1) RETURNING id",
+        jsonld,
+    ).Scan(&id)
+
+    if err != nil {
+        return fmt.Errorf("failed to insert episode: %w", err)
+    }
+
+    a.logger.Info("Episode stored",
+        "id", id,
+        "location", episode.Activity.Location.Name,
+        "type", episode.Type)
+
+    return nil
+}
+
+// Update existing episode
+func (a *Agent) updateEpisode(episodeID string, updates map[string]interface{}) error {
+    if a.db == nil {
+        return nil
+    }
+
+    // Build JSONB update operations
+    var setParts []string
+    var args []interface{}
+    argIndex := 1
+
+    for path, value := range updates {
+        jsonValue, err := json.Marshal(value)
+        if err != nil {
+            return fmt.Errorf("failed to marshal update value: %w", err)
+        }
+
+        setParts = append(setParts, fmt.Sprintf("jsonld = jsonb_set(jsonld, '{%s}', $%d)", path, argIndex))
+        args = append(args, jsonValue)
+        argIndex++
+    }
+
+    query := fmt.Sprintf(
+        "UPDATE behavioral_episodes SET %s WHERE id = $%d",
+        strings.Join(setParts, ", "),
+        argIndex,
+    )
+    args = append(args, episodeID)
+
+    result, err := a.db.Exec(query, args...)
+    if err != nil {
+        return fmt.Errorf("failed to update episode: %w", err)
+    }
+
+    rowsAffected, _ := result.RowsAffected()
+    if rowsAffected == 0 {
+        return fmt.Errorf("episode not found: %s", episodeID)
+    }
+
+    return nil
+}
+```
+
+#### Semantic Queries
+
+Leverage JSONB for semantic web queries:
+
+```go
+// Query episodes by activity type
+func (a *Agent) getEpisodesByActivityType(activityType string, limit int) ([]ontology.BehavioralEpisode, error) {
+    if a.db == nil {
+        return nil, fmt.Errorf("postgres not configured")
+    }
+
+    query := `
+        SELECT jsonld 
+        FROM behavioral_episodes 
+        WHERE jsonld->'adl:activity'->>'@type' = $1 
+        ORDER BY started_at DESC 
+        LIMIT $2
+    `
+
+    rows, err := a.db.Query(query, activityType, limit)
+    if err != nil {
+        return nil, err
+    }
+    defer rows.Close()
+
+    var episodes []ontology.BehavioralEpisode
+    for rows.Next() {
+        var jsonld []byte
+        if err := rows.Scan(&jsonld); err != nil {
+            return nil, err
+        }
+
+        var episode ontology.BehavioralEpisode
+        if err := json.Unmarshal(jsonld, &episode); err != nil {
+            a.logger.Warn("Failed to unmarshal episode", "error", err)
+            continue
+        }
+
+        episodes = append(episodes, episode)
+    }
+
+    return episodes, nil
+}
+
+// Complex semantic query with time range
+func (a *Agent) getEpisodePatterns(location string, timeOfDay string, days int) (*EpisodePattern, error) {
+    query := `
+        SELECT 
+            COUNT(*) as episode_count,
+            AVG(EXTRACT(EPOCH FROM (
+                (jsonld->>'jeeves:endedAt')::timestamptz - 
+                (jsonld->>'jeeves:startedAt')::timestamptz
+            ))) as avg_duration_seconds,
+            array_agg(DISTINCT jsonld->>'jeeves:dayOfWeek') as days_of_week
+        FROM behavioral_episodes 
+        WHERE location = $1 
+          AND jsonld->>'jeeves:timeOfDay' = $2
+          AND started_at >= NOW() - INTERVAL '%d days'
+    `
+
+    var pattern EpisodePattern
+    var daysOfWeek pq.StringArray
+
+    err := a.db.QueryRow(fmt.Sprintf(query, days), location, timeOfDay).Scan(
+        &pattern.EpisodeCount,
+        &pattern.AvgDurationSeconds,
+        &daysOfWeek,
+    )
+
+    if err != nil {
+        return nil, err
+    }
+
+    pattern.DaysOfWeek = []string(daysOfWeek)
+    return &pattern, nil
+}
+```
+
+### Error Handling and Resilience
+
+#### Graceful Degradation
+
+```go
+func (a *Agent) storeEpisodeWithFallback(episode *ontology.BehavioralEpisode) {
+    // Primary: Store in PostgreSQL
+    if err := a.storeEpisode(episode); err != nil {
+        a.logger.Error("Failed to store episode in PostgreSQL", "error", err)
+
+        // Fallback: Store in Redis with shorter TTL
+        if err := a.storeEpisodeToRedis(episode); err != nil {
+            a.logger.Error("Failed to store episode in Redis fallback", "error", err)
+            // Could add to retry queue or drop with metric
+        } else {
+            a.logger.Warn("Episode stored to Redis fallback")
+        }
+    }
+}
+```
+
+#### Retry Logic with Exponential Backoff
+
+```go
+func (a *Agent) storeEpisodeWithRetry(episode *ontology.BehavioralEpisode) error {
+    backoff := time.Second
+    maxRetries := 3
+
+    for attempt := 1; attempt <= maxRetries; attempt++ {
+        err := a.storeEpisode(episode)
+        if err == nil {
+            return nil
+        }
+
+        if attempt == maxRetries {
+            return fmt.Errorf("failed after %d attempts: %w", maxRetries, err)
+        }
+
+        a.logger.Warn("Episode storage failed, retrying",
+            "attempt", attempt,
+            "backoff", backoff,
+            "error", err)
+
+        time.Sleep(backoff)
+        backoff *= 2  // Exponential backoff
+    }
+
+    return nil
+}
+```
+
+---
+
+## Virtual Time Support
+
+Virtual time enables **testing long-duration scenarios** (movies, work sessions) in compressed time while maintaining realistic timestamps in stored data.
+
+### Implementation Overview
+
+Virtual time works by:
+1. **MQTT Time Configuration**: Test runner publishes time config
+2. **TimeManager Component**: Calculates virtual timestamps
+3. **Agent Integration**: Uses virtual time for stored data
+4. **Database Consistency**: All timestamps reflect virtual time, not real test time
+
+### TimeManager Implementation
+
+#### Basic TimeManager
+
+```go
+// pkg/time/manager.go (or in your agent package)
+type TimeManager struct {
+    virtualTimeEnabled bool
+    virtualStartTime   time.Time
+    testStartTime      time.Time
+    timeScale          float64
+    mutex              sync.RWMutex
+}
+
+func NewTimeManager() *TimeManager {
+    return &TimeManager{
+        virtualTimeEnabled: false,
+    }
+}
+
+// ConfigureFromMQTT sets up virtual time from test configuration
+func (tm *TimeManager) ConfigureFromMQTT(payload []byte) error {
+    tm.mutex.Lock()
+    defer tm.mutex.Unlock()
+
+    var config struct {
+        VirtualStart  string  `json:"virtual_start"`
+        TimeScale     float64 `json:"time_scale"`
+        TestStartTime string  `json:"test_start_time"`
+    }
+
+    if err := json.Unmarshal(payload, &config); err != nil {
+        return fmt.Errorf("failed to unmarshal time config: %w", err)
+    }
+
+    virtualStart, err := time.Parse(time.RFC3339, config.VirtualStart)
+    if err != nil {
+        return fmt.Errorf("invalid virtual_start time: %w", err)
+    }
+
+    testStart, err := time.Parse(time.RFC3339, config.TestStartTime)
+    if err != nil {
+        return fmt.Errorf("invalid test_start_time: %w", err)
+    }
+
+    tm.virtualTimeEnabled = true
+    tm.virtualStartTime = virtualStart
+    tm.testStartTime = testStart
+    tm.timeScale = config.TimeScale
+
+    return nil
+}
+
+// Now returns current time (virtual or real)
+func (tm *TimeManager) Now() time.Time {
+    tm.mutex.RLock()
+    defer tm.mutex.RUnlock()
+
+    if !tm.virtualTimeEnabled {
+        return time.Now()
+    }
+
+    // Calculate virtual time
+    elapsed := time.Since(tm.testStartTime)
+    virtualElapsed := time.Duration(float64(elapsed) * tm.timeScale)
+    return tm.virtualStartTime.Add(virtualElapsed)
+}
+
+// IsVirtualTimeEnabled returns whether virtual time is active
+func (tm *TimeManager) IsVirtualTimeEnabled() bool {
+    tm.mutex.RLock()
+    defer tm.mutex.RUnlock()
+    return tm.virtualTimeEnabled
+}
+
+// Reset disables virtual time (for production)
+func (tm *TimeManager) Reset() {
+    tm.mutex.Lock()
+    defer tm.mutex.Unlock()
+    tm.virtualTimeEnabled = false
+}
+```
+
+### Agent Integration
+
+#### Add TimeManager to Agent
+
+```go
+type Agent struct {
+    mqtt   mqtt.Client
+    redis  redis.Client
+    db     *sql.DB
+    cfg    *config.Config
+    logger *slog.Logger
+
+    timeManager *TimeManager  // Virtual time support
+}
+
+func NewAgent(mqttClient mqtt.Client, redisClient redis.Client, db *sql.DB, cfg *config.Config, logger *slog.Logger) *Agent {
+    return &Agent{
+        mqtt:        mqttClient,
+        redis:       redisClient,
+        db:          db,
+        cfg:         cfg,
+        logger:      logger,
+        timeManager: NewTimeManager(),
+    }
+}
+```
+
+#### Subscribe to Time Configuration
+
+```go
+func (a *Agent) Start(ctx context.Context) error {
+    // ... existing setup ...
+
+    // Subscribe to virtual time configuration (E2E testing)
+    if err := a.mqtt.Subscribe("automation/test/time_config", 0, a.handleTimeConfig); err != nil {
+        a.logger.Warn("Failed to subscribe to time config", "error", err)
+        // Don't fail - virtual time is optional
+    }
+
+    // ... rest of agent startup
+}
+
+func (a *Agent) handleTimeConfig(msg mqtt.Message) {
+    if err := a.timeManager.ConfigureFromMQTT(msg.Payload()); err != nil {
+        a.logger.Error("Failed to configure virtual time", "error", err)
+        return
+    }
+
+    a.logger.Info("Virtual time configured",
+        "enabled", a.timeManager.IsVirtualTimeEnabled(),
+        "scale", a.timeManager.timeScale)
+}
+```
+
+### Usage Patterns
+
+#### For Stored Timestamps
+
+**Always use virtual time for data that will be stored**:
+
+```go
+// Good: Use virtual time for database records
+func (a *Agent) createEpisode(location string) {
+    episode := &ontology.BehavioralEpisode{
+        ID:        generateUUID(),
+        StartedAt: a.timeManager.Now(),  // Virtual time if testing
+        Location:  location,
+        // ... other fields
+    }
+
+    a.storeEpisode(episode)
+}
+
+// Good: Use virtual time for Redis data
+func (a *Agent) recordSensorReading(location string, value float64) {
+    timestamp := a.timeManager.Now()
+    
+    data := SensorReading{
+        Value:     value,
+        Timestamp: timestamp,  // Virtual time
+        Location:  location,
+    }
+
+    key := fmt.Sprintf("sensor:readings:%s", location)
+    score := float64(timestamp.UnixMilli())
+    
+    a.redis.ZAdd(context.Background(), key, score, data)
+}
+```
+
+#### For Internal Operations
+
+**Use real time for performance, logging, and internal operations**:
+
+```go
+// Good: Use real time for performance measurement
+func (a *Agent) processWithTiming(ctx context.Context, data []byte) error {
+    start := time.Now()  // Real time for performance
+    defer func() {
+        duration := time.Since(start)
+        a.logger.Debug("Processing completed", "duration", duration)
+    }()
+
+    // Use virtual time for stored results
+    result := ProcessingResult{
+        Timestamp: a.timeManager.Now(),  // Virtual time
+        Data:      processData(data),
+    }
+
+    return a.storeResult(result)
+}
+
+// Good: Use real time for rate limiting
+func (a *Agent) checkRateLimit(location string) bool {
+    lastTime := a.lastOperationTime[location]
+    if time.Since(lastTime) < 5*time.Second {  // Real time
+        return false  // Rate limited
+    }
+    
+    a.lastOperationTime[location] = time.Now()  // Real time
+    return true
+}
+```
+
+### Testing Considerations
+
+#### Test Both Modes
+
+Ensure your agent works with and without virtual time:
+
+```go
+func TestAgentWithVirtualTime(t *testing.T) {
+    agent := setupTestAgent(t)
+
+    // Configure virtual time
+    timeConfig := `{
+        "virtual_start": "2024-12-19T20:00:00Z",
+        "time_scale": 60,
+        "test_start_time": "2024-12-19T10:30:00Z"
+    }`
+
+    // Simulate time config message
+    msg := &MockMessage{
+        topic:   "automation/test/time_config",
+        payload: []byte(timeConfig),
+    }
+    agent.handleTimeConfig(msg)
+
+    // Test that stored timestamps use virtual time
+    episode := agent.createEpisode("test_location")
+    assert.True(t, agent.timeManager.IsVirtualTimeEnabled())
+    
+    // Virtual timestamp should be around 2024-12-19T20:00:00Z
+    assert.Equal(t, 2024, episode.StartedAt.Year())
+    assert.Equal(t, 12, int(episode.StartedAt.Month()))
+    assert.Equal(t, 19, episode.StartedAt.Day())
+    assert.Equal(t, 20, episode.StartedAt.Hour())
+}
+
+func TestAgentWithoutVirtualTime(t *testing.T) {
+    agent := setupTestAgent(t)
+
+    // No virtual time configuration
+    episode := agent.createEpisode("test_location")
+    assert.False(t, agent.timeManager.IsVirtualTimeEnabled())
+    
+    // Should use real time (approximately now)
+    now := time.Now()
+    assert.WithinDuration(t, now, episode.StartedAt, 1*time.Second)
+}
+```
+
+#### E2E Test Scenarios
+
+Virtual time enables testing long scenarios efficiently:
+
+```yaml
+# test-scenarios/long_workday.yaml
+name: "8-Hour Workday - Compressed"
+description: "Full workday in 4 minutes with virtual time"
+
+test_mode:
+  enabled: true
+  virtual_start: "2024-12-19T09:00:00Z"
+  time_scale: 120  # 1 real second = 120 virtual seconds
+
+events:
+  - time: 0
+    sensor: "motion:home_office"
+    value: true
+    description: "Start work at virtual 9:00 AM"
+
+  - time: 14400  # 4 virtual hours = 2 real minutes
+    sensor: "motion:home_office"
+    value: true
+    description: "Lunch break at virtual 1:00 PM"
+
+  - time: 28800  # 8 virtual hours = 4 real minutes
+    type: occupancy
+    location: home_office
+    data:
+      state: "empty"
+    description: "End work at virtual 5:00 PM"
+
+expectations:
+  postgres:
+    - time: 28810
+      postgres_query: |
+        SELECT 
+          EXTRACT(hour FROM (jsonld->>'jeeves:startedAt')::timestamptz) as start_hour,
+          EXTRACT(hour FROM (jsonld->>'jeeves:endedAt')::timestamptz) as end_hour
+        FROM behavioral_episodes 
+        WHERE location = 'home_office'
+        ORDER BY id DESC LIMIT 1
+      postgres_expected:
+        start_hour: 9
+        end_hour: 17  # Virtual 5 PM
+```
+
+This comprehensive virtual time system enables realistic long-duration testing while maintaining data integrity and realistic behavioral patterns.
 
 ---
 

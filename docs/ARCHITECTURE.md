@@ -9,6 +9,7 @@
 - [Shared Services](#shared-services)
 - [Monorepo Structure](#monorepo-structure)
 - [Data Flow](#data-flow)
+- [Behavioral Learning Layer](#behavioral-learning-layer)
 - [Design Principles](#design-principles)
 
 ---
@@ -523,6 +524,226 @@ graph LR
 - **Agent Instances**: Each agent can run 1 instance (no load balancing needed yet)
 
 **Bottleneck**: LLM inference latency (~1-5s per occupancy analysis)
+
+---
+
+## Behavioral Learning Layer
+
+The **Behavioral Learning Layer** captures and stores semantic representations of user activities for future pattern learning and personalization. This layer operates **asynchronously** from real-time automation, allowing it to fail without impacting lighting or occupancy decisions.
+
+### Components
+
+#### Behavior Agent
+- **Purpose**: Detect activity episodes (periods of activity in specific locations)
+- **Data Sources**: Occupancy context, lighting state, media events
+- **Output**: Semantic episode records stored in Postgres as JSON-LD
+- **Virtual Time**: Supports accelerated time for E2E testing scenarios
+
+#### PostgreSQL Database  
+- **Purpose**: Long-term storage of behavioral episodes using semantic web standards
+- **Schema**: Single `behavioral_episodes` table with JSONB column for JSON-LD documents
+- **Retention**: Indefinite (episodes are valuable for pattern analysis)
+- **Indexing**: GIN indexes on JSONB for efficient semantic queries
+
+### Episode Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> NoEpisode: System Start
+    NoEpisode --> ActiveEpisode: Occupancy: empty → occupied
+    ActiveEpisode --> ClosedEpisode: Occupancy: occupied → empty
+    ClosedEpisode --> NoEpisode: Episode stored in Postgres
+    
+    ActiveEpisode --> ActiveEpisode: Lighting/Media events\n(captured in episode)
+    
+    note right of ActiveEpisode
+        Episode ID generated
+        Start timestamp recorded
+        Environmental context captured
+    end note
+    
+    note right of ClosedEpisode
+        End timestamp recorded
+        Duration calculated
+        Full episode stored as JSON-LD
+    end note
+```
+
+### Data Flow Integration
+
+The Behavioral Learning Layer receives context from existing automation agents without disrupting their operation:
+
+```mermaid
+graph TB
+    subgraph "Real-Time Automation (Critical Path)"
+        OCC[Occupancy Agent]
+        LIGHT[Light Agent]
+        ILL[Illuminance Agent]
+        
+        OCC -->|automation/context/occupancy/{loc}| LIGHT
+        ILL -->|automation/context/illuminance/{loc}| LIGHT
+    end
+    
+    subgraph "Behavioral Learning (Async)"
+        BEH[Behavior Agent]
+        PG[(Postgres<br/>Episodes)]
+        
+        OCC -.->|automation/context/occupancy/{loc}| BEH
+        LIGHT -.->|automation/context/lighting/{loc}| BEH
+        MEDIA[Media Players] -.->|automation/media/{state}/{loc}| BEH
+        
+        BEH -->|JSON-LD episodes| PG
+    end
+    
+    subgraph "Future: Pattern Learning"
+        ML[Pattern Analysis]
+        PRED[Preference Prediction]
+        
+        PG -.->|episode history| ML
+        ML -.->|learned patterns| PRED
+        PRED -.->|suggestions| LIGHT
+    end
+    
+    style BEH fill:#e1f5fe
+    style PG fill:#e1f5fe
+    style ML fill:#f3e5f5,stroke-dasharray: 5 5
+    style PRED fill:#f3e5f5,stroke-dasharray: 5 5
+```
+
+### JSON-LD Semantic Structure
+
+Episodes are stored using semantic web standards for future interoperability and analysis:
+
+```json
+{
+  "@context": {
+    "@vocab": "https://saref.etsi.org/core#",
+    "jeeves": "https://jeeves.home/vocab#",
+    "adl": "http://purl.org/adl#",
+    "sosa": "http://www.w3.org/ns/sosa/",
+    "xsd": "http://www.w3.org/2001/XMLSchema#"
+  },
+  "@type": "jeeves:BehavioralEpisode",
+  "@id": "urn:uuid:550e8400-e29b-41d4-a716-446655440000",
+  "jeeves:startedAt": "2024-12-19T20:00:00Z",
+  "jeeves:endedAt": "2024-12-19T21:30:00Z",
+  "jeeves:dayOfWeek": "Thursday",
+  "jeeves:timeOfDay": "evening",
+  "jeeves:duration": "PT1H30M",
+  "adl:activity": {
+    "@type": "adl:RelaxationActivity",
+    "adl:location": {
+      "@type": "saref:Room",
+      "name": "living_room"
+    }
+  },
+  "jeeves:hadEnvironmentalContext": {
+    "jeeves:initialLightLevel": 120,
+    "jeeves:mediaPresent": true,
+    "jeeves:lightingAdjustments": [
+      {
+        "timestamp": "2024-12-19T20:01:00Z",
+        "brightness": 15,
+        "source": "manual"
+      }
+    ]
+  }
+}
+```
+
+### Episode Detection Triggers
+
+**Current Implementation (Occupancy-Based)**:
+- **Start**: Room transitions from `empty` → `occupied`
+- **End**: Room transitions from `occupied` → `empty`
+
+**Future Enhancements**:
+- **Activity Inference**: Multiple sensors suggest specific activities (watching TV, working, cooking)
+- **Time-Based Boundaries**: Natural break points (sleep, work hours, meal times)
+- **Context Changes**: Significant environmental changes within same occupancy period
+
+### Virtual Time Support
+
+The Behavior Agent supports **virtual time compression** for E2E testing:
+
+```go
+// TimeManager provides dual-mode timestamps
+func (tm *TimeManager) Now() time.Time {
+    if !tm.virtualTimeEnabled {
+        return time.Now()  // Real time
+    }
+    
+    // Virtual time calculation
+    elapsed := time.Since(tm.testStartTime)
+    virtualElapsed := time.Duration(float64(elapsed) * tm.timeScale)
+    return tm.virtualStartTime.Add(virtualElapsed)
+}
+```
+
+This enables testing long scenarios (90-minute movies) in compressed time (1.5 minutes) while maintaining realistic timestamps in the database.
+
+### Performance Characteristics
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| **Episode Rate** | 5-20/day | Varies by household activity |
+| **Episode Size** | 2-5 KB | JSON-LD with environmental context |
+| **Storage Growth** | ~50-100 KB/day | Typical household |
+| **Write Latency** | < 50ms | Postgres JSONB insert |
+| **Read Queries** | Complex semantic queries | Future pattern analysis |
+
+### Failure Isolation
+
+The Behavioral Learning Layer is designed to **fail gracefully**:
+
+- **Postgres Unavailable**: Behavior Agent logs errors but continues listening
+- **Agent Crash**: No impact on real-time automation (occupancy, lighting)
+- **Data Loss**: Episodes are reconstructable from MQTT message replay
+- **Schema Changes**: JSON-LD provides forward compatibility
+
+### Future Pattern Learning Applications
+
+The episode data enables future machine learning capabilities:
+
+1. **Routine Detection**: Identify daily/weekly patterns
+2. **Preference Learning**: Learn lighting preferences by time/activity
+3. **Anomaly Detection**: Detect unusual activity patterns
+4. **Predictive Automation**: Pre-adjust environment based on predicted activities
+5. **Energy Optimization**: Learn optimal heating/cooling based on occupancy patterns
+
+### Database Querying Examples
+
+**Daily Activity Summary**:
+```sql
+SELECT 
+  (jsonld->>'jeeves:timeOfDay') as time_of_day,
+  COUNT(*) as episode_count,
+  AVG(EXTRACT(EPOCH FROM (
+    (jsonld->>'jeeves:endedAt')::timestamptz - 
+    (jsonld->>'jeeves:startedAt')::timestamptz
+  ))::int / 60) as avg_duration_minutes
+FROM behavioral_episodes 
+WHERE jsonld->>'jeeves:dayOfWeek' = 'Monday'
+  AND created_at >= NOW() - INTERVAL '30 days'
+GROUP BY (jsonld->>'jeeves:timeOfDay');
+```
+
+**Room Usage Patterns**:
+```sql
+SELECT 
+  location,
+  COUNT(*) as total_episodes,
+  AVG(EXTRACT(EPOCH FROM (
+    (jsonld->>'jeeves:endedAt')::timestamptz - 
+    (jsonld->>'jeeves:startedAt')::timestamptz
+  ))::int / 60) as avg_duration_minutes
+FROM behavioral_episodes 
+WHERE created_at >= NOW() - INTERVAL '7 days'
+GROUP BY location
+ORDER BY total_episodes DESC;
+```
+
+The semantic structure enables rich queries about user behavior while maintaining privacy through local storage.
 
 ---
 
