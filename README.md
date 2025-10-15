@@ -382,10 +382,6 @@ This is a personal home automation project, but contributions are welcome!
 3. Add unit tests for business logic
 4. Update documentation as needed
 
-## License
-
-Copyright © 2024 Saaga Helin. All rights reserved.
-
 ## Acknowledgments
 
 Built with:
