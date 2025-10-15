@@ -10,7 +10,7 @@ J.E.E.V.E.S. Platform 2.0 is a complete rewrite of the Node.js-based home automa
 
 - **Collector Agent**: Receives raw sensor data, stores in Redis, publishes triggers
 - **Illuminance Agent**: Monitors light levels and adjusts lighting automatically
-- **Light Agent**: Bridges MQTT commands with Matter/physical lights
+- **Light Agent**: Bridges MQTT commands with physical lights
 - **Occupancy Agent**: Detects and tracks room occupancy patterns
 
 ## Architecture Principles
@@ -24,7 +24,7 @@ J.E.E.V.E.S. Platform 2.0 is a complete rewrite of the Node.js-based home automa
 ## Repository Structure
 
 ```
-jeeves-platform/
+jeeves/
 ├── cmd/                        # Agent entry points (bootstrap code)
 │   ├── collector-agent/
 │   ├── illuminance-agent/
@@ -120,31 +120,31 @@ make run-occupancy
 
 ## Agent Details
 
-### Collector Agent (✅ Fully Implemented)
+### Collector Agent
 
-The collector agent is the data ingestion layer of the platform.
+The Collector Agent is the **central data hub** that receives all sensor data and makes it available to other agents in the system.
 
-**Responsibilities:**
-- Subscribes to raw sensor data on `automation/raw/+/+`
-- Parses and validates sensor messages
-- Stores data in Redis using appropriate data structures:
-  - Motion sensors → Sorted sets + metadata hash
-  - Environmental sensors (temp/illuminance) → Consolidated sorted sets
-  - Generic sensors → Lists + metadata hash
-- Publishes trigger messages to `automation/sensor/{type}/{location}`
-- Automatic data cleanup (24-hour TTL)
+**What it does:**
+- Acts as the data gateway between raw sensors and the rest of the platform
+- Receives sensor data from motion, temperature, illuminance, and other sensors
+- Stores data efficiently in Redis with 24-hour automatic cleanup
+- Notifies other agents when new sensor data is available
+- Handles 1-2 messages/second with minimal resource usage
 
-**Topics:**
-- Input: `automation/raw/{sensor_type}/{location}`
-- Output: `automation/sensor/{sensor_type}/{location}`
+**Key Features:**
+- **Smart Storage**: Uses optimized Redis data structures for different sensor types
+- **Reliable Processing**: Gracefully handles malformed messages and connection issues
+- **Event Distribution**: Publishes trigger messages so other agents know when to act
+- **Auto-Cleanup**: Prevents memory growth with automatic data expiration
+- **High Performance**: Processes sensor data with minimal latency
 
-**Storage Patterns:**
-- `sensor:motion:{location}` (ZSET)
-- `meta:motion:{location}` (HASH)
-- `sensor:environmental:{location}` (ZSET)
-- `sensor:{type}:{location}` (LIST for unknown types)
+**Integration Points:**
+- **Input**: Raw sensor data via MQTT (`automation/raw/+/+`)
+- **Output**: Trigger notifications via MQTT (`automation/sensor/+/+`)
+- **Storage**: Sensor data buffered in Redis for fast access by other agents
+- **Monitoring**: Health check endpoint for container orchestration
 
-See [docs/collector/](docs/collector/) for complete specifications.
+See [docs/collector/](docs/collector/) for complete documentation.
 
 ### Illuminance Agent (🚧 Stub)
 
@@ -375,9 +375,9 @@ Health checks are intentionally minimal (no dependency checks) to keep them fast
 
 ## Contributing
 
-This is a personal home automation project, but contributions are welcome!
+This is a personal home automation project, if want to contribute:
 
-1. Follow the architecture patterns established in `docs/instructions.md`
+1. Follow the architecture patterns established in `docs/`
 2. Write idiomatic Go code
 3. Add unit tests for business logic
 4. Update documentation as needed
