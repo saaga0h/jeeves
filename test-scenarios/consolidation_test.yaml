@@ -1,0 +1,167 @@
+name: "Consolidation Test - Movie Night with Forced Consolidation"
+description: "Test micro-episode consolidation after movie viewing session"
+
+test_mode:
+  virtual_start: "2025-10-14T19:00:00Z"
+  time_scale: 60
+
+setup:
+  location: "living_room"
+  initial_state:
+    occupancy: null
+
+events:
+  # === Movie Session (19:00-20:30 virtual) ===
+  - time: 0
+    sensor: "motion:living_room"
+    value: true
+    description: "Person enters"
+
+  - time: 2
+    type: occupancy
+    location: living_room
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Occupancy detected"
+
+  - time: 10
+    type: media
+    location: living_room
+    data:
+      state: "playing"
+      media_type: "video"
+      source: "apple_tv"
+    description: "Start movie"
+
+  # First break at 30 min
+  - time: 1800
+    type: occupancy
+    location: living_room
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Leave for bathroom"
+
+  # Return after 5 min
+  - time: 2100
+    type: occupancy
+    location: living_room
+    data:
+      state: "occupied"
+      confidence: 0.85
+    description: "Return from bathroom"
+
+  - time: 2105
+    type: media
+    location: living_room
+    data:
+      state: "playing"
+      media_type: "video"
+    description: "Resume movie"
+
+  # Movie ends
+  - time: 5400
+    type: media
+    location: living_room
+    data:
+      state: "stopped"
+      media_type: "video"
+    description: "Movie ends"
+
+  - time: 5500
+    type: occupancy
+    location: living_room
+    data:
+      state: "empty"
+      confidence: 0.9
+    description: "Person leaves"
+
+  # === Trigger Consolidation ===
+  - time: 5550
+    type: behavior
+    location: living_room
+    data:
+      action: "consolidate"
+      lookback_hours: 24
+    description: "Trigger consolidation of movie episodes"
+
+wait:
+  - time: 5600
+    description: "Wait for consolidation to complete"
+
+expectations:
+  behavior_events:
+    # Three micro-episodes created
+    - time: 5
+      topic: "automation/behavior/episode/started"
+      payload:
+        location: "living_room"
+
+    - time: 1805
+      topic: "automation/behavior/episode/closed"
+      payload:
+        location: "living_room"
+
+    - time: 2105
+      topic: "automation/behavior/episode/started"
+      payload:
+        location: "living_room"
+
+    - time: 5505
+      topic: "automation/behavior/episode/closed"
+      payload:
+        location: "living_room"
+
+    # Consolidation completed  
+    - time: 5580
+      topic: "automation/behavior/consolidation/completed"
+      payload:
+        macro_episodes_created: 1
+        micro_episodes_processed: 2
+
+  postgres:
+    # Verify micro-episodes
+    - time: 5590
+      postgres_query: "SELECT COUNT(*) FROM behavioral_episodes WHERE location = 'living_room'"
+      postgres_expected: 2
+      description: "Two micro-episodes created"
+
+    # Verify macro-episode
+    - time: 5590
+      postgres_query: "SELECT COUNT(*) FROM macro_episodes WHERE 'living_room' = ANY(locations)"
+      postgres_expected: 1
+      description: "One macro-episode created"
+
+    # Verify macro-episode duration
+    - time: 5590
+      postgres_query: |
+        SELECT duration_minutes 
+        FROM macro_episodes 
+        WHERE 'living_room' = ANY(locations)
+        ORDER BY created_at DESC 
+        LIMIT 1
+      postgres_expected: "~85"
+      description: "Macro-episode duration is ~85 minutes (total viewing time)"
+
+    # Verify micro-episode references
+    - time: 5590
+      postgres_query: |
+        SELECT array_length(micro_episode_ids, 1) 
+        FROM macro_episodes 
+        WHERE 'living_room' = ANY(locations)
+        ORDER BY created_at DESC 
+        LIMIT 1
+      postgres_expected: 2
+      description: "Macro-episode references 2 micro-episodes"
+
+    # Verify semantic tags
+    - time: 5590
+      postgres_query: |
+        SELECT 'living_room' = ANY(semantic_tags) 
+        FROM macro_episodes 
+        WHERE 'living_room' = ANY(locations)
+        ORDER BY created_at DESC 
+        LIMIT 1
+      postgres_expected: true
+      description: "Macro-episode has location in semantic tags"

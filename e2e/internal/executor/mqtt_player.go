@@ -170,6 +170,36 @@ func (p *MQTTPlayer) Publish(topic string, qos byte, retain bool, payload []byte
 	return nil
 }
 
+// PublishBehaviorEvent publishes behavior control events (consolidation triggers)
+func (p *MQTTPlayer) PublishBehaviorEvent(location string, data map[string]interface{}) error {
+	p.logger.Printf("DEBUG: PublishBehaviorEvent called with location='%s'", location)
+	topic := "automation/behavior/consolidate"
+
+	// Create the payload with location context
+	payload := map[string]interface{}{
+		"location": location,
+	}
+
+	// Merge the event data into the payload
+	for key, value := range data {
+		payload[key] = value
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	token := p.client.Publish(topic, 1, false, payloadBytes)
+	token.Wait()
+	if token.Error() != nil {
+		return fmt.Errorf("failed to publish to %s: %w", topic, token.Error())
+	}
+
+	p.logger.Printf("Published behavior event to %s: %s", topic, string(payloadBytes))
+	return nil
+}
+
 // Close disconnects from MQTT broker
 func (p *MQTTPlayer) Close() {
 	if p.client != nil && p.client.IsConnected() {

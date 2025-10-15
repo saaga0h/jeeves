@@ -69,7 +69,15 @@ func (a *Agent) Start(ctx context.Context) error {
 		}
 	}
 
+	// NEW: Subscribe to manual consolidation trigger
+	if err := a.mqtt.Subscribe("automation/behavior/consolidate", 0, a.handleConsolidationTrigger); err != nil {
+		a.logger.Warn("Failed to subscribe to consolidation trigger", "error", err)
+	}
+
 	a.logger.Info("Subscribed to topics", "topics", topics)
+
+	// NEW: Start automatic consolidation job
+	go a.runConsolidationJob(ctx)
 
 	// Block until context cancelled
 	<-ctx.Done()

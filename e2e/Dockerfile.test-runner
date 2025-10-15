@@ -10,6 +10,7 @@ RUN go mod download
 
 # Copy source code
 COPY e2e/ ./e2e/
+COPY pkg/ ./pkg/
 
 # Build test-runner
 RUN go build -o test-runner ./e2e/cmd/test-runner

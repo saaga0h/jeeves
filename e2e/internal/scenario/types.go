@@ -44,6 +44,9 @@ func (e *SensorEvent) Category() string {
 	if e.Type == "media" {
 		return "media"
 	}
+	if e.Type == "behavior" {
+		return "behavior" // NEW
+	}
 	return "context" // occupancy, lighting, etc
 }
 

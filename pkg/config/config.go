@@ -66,6 +66,11 @@ type Config struct {
 	LLMEndpoint                  string
 	LLMModel                     string
 	MaxEventHistory              int
+
+	// Consolidation settings
+	ConsolidationIntervalHours int
+	ConsolidationLookbackHours int
+	ConsolidationMaxGapMinutes int
 }
 
 // NewConfig creates a new Config with default values
@@ -112,6 +117,10 @@ func NewConfig() *Config {
 		LLMEndpoint:                  "http://localhost:11434/api/generate",
 		LLMModel:                     "llama3.2:3b",
 		MaxEventHistory:              100,
+		// Consolidation defaults
+		ConsolidationIntervalHours: 24,
+		ConsolidationLookbackHours: 48,
+		ConsolidationMaxGapMinutes: 120,
 	}
 }
 
@@ -285,6 +294,23 @@ func (c *Config) LoadFromEnv() {
 			c.MaxEventHistory = max
 		}
 	}
+
+	// Consolidation configuration
+	if v := os.Getenv("JEEVES_CONSOLIDATION_INTERVAL_HOURS"); v != "" {
+		if hours, err := strconv.Atoi(v); err == nil {
+			c.ConsolidationIntervalHours = hours
+		}
+	}
+	if v := os.Getenv("JEEVES_CONSOLIDATION_LOOKBACK_HOURS"); v != "" {
+		if hours, err := strconv.Atoi(v); err == nil {
+			c.ConsolidationLookbackHours = hours
+		}
+	}
+	if v := os.Getenv("JEEVES_CONSOLIDATION_MAX_GAP_MINUTES"); v != "" {
+		if minutes, err := strconv.Atoi(v); err == nil {
+			c.ConsolidationMaxGapMinutes = minutes
+		}
+	}
 }
 
 // LoadFromFlags parses command-line flags and overrides config values
@@ -341,6 +367,11 @@ func (c *Config) LoadFromFlags() {
 	pflag.StringVar(&c.LLMEndpoint, "llm-endpoint", c.LLMEndpoint, "LLM API endpoint URL")
 	pflag.StringVar(&c.LLMModel, "llm-model", c.LLMModel, "LLM model name")
 	pflag.IntVar(&c.MaxEventHistory, "max-event-history", c.MaxEventHistory, "Maximum motion event history to keep")
+
+	// Consolidation flags
+	pflag.IntVar(&c.ConsolidationIntervalHours, "consolidation-interval-hours", c.ConsolidationIntervalHours, "Episode consolidation interval in hours")
+	pflag.IntVar(&c.ConsolidationLookbackHours, "consolidation-lookback-hours", c.ConsolidationLookbackHours, "Episode consolidation lookback period in hours")
+	pflag.IntVar(&c.ConsolidationMaxGapMinutes, "consolidation-max-gap-minutes", c.ConsolidationMaxGapMinutes, "Maximum gap between episodes for consolidation in minutes")
 
 	pflag.Parse()
 }

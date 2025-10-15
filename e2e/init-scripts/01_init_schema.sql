@@ -40,6 +40,45 @@ CREATE INDEX idx_episodes_started ON behavioral_episodes(started_at_text DESC);
 -- Full JSONB GIN index for arbitrary queries
 CREATE INDEX idx_episodes_jsonb ON behavioral_episodes USING GIN (jsonld);
 
+-- Macro-episodes table (consolidated from micro-episodes)
+CREATE TABLE macro_episodes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    
+    -- Pattern information
+    pattern_type TEXT NOT NULL,  -- e.g., "WatchingMovie", "WorkSession"
+    
+    -- Time range (virtual time aware)
+    start_time TIMESTAMPTZ NOT NULL,
+    end_time TIMESTAMPTZ NOT NULL,
+    duration_minutes INT NOT NULL,
+    
+    -- Locations involved
+    locations TEXT[] NOT NULL,  -- Array of location names
+    
+    -- References to micro-episodes
+    micro_episode_ids UUID[] NOT NULL,  -- Array of micro-episode IDs
+    
+    -- Semantic summary
+    summary TEXT,
+    semantic_tags TEXT[],  -- e.g., ["WatchingMovie", "living_room", "evening"]
+    
+    -- Context features (for future pattern detection)
+    context_features JSONB,  -- { manual_action_count: 3, ... }
+    
+    -- Vector embedding for RAG (future)
+    embedding vector(1536),
+    
+    -- Metadata
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX idx_macro_pattern ON macro_episodes(pattern_type);
+CREATE INDEX idx_macro_start ON macro_episodes(start_time DESC);
+CREATE INDEX idx_macro_locations ON macro_episodes USING GIN(locations);
+CREATE INDEX idx_macro_tags ON macro_episodes USING GIN(semantic_tags);
+CREATE INDEX idx_macro_micro_ids ON macro_episodes USING GIN(micro_episode_ids);
+
 -- Success message
 DO $$
 BEGIN

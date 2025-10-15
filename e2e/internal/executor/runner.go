@@ -101,6 +101,7 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (*scenario.TestR
 
 		// Route event based on category
 		var err error
+		r.logger.Printf("Event category: %s, type: %s", event.Category(), event.Type)
 		switch event.Category() {
 		case "sensor":
 			err = r.player.PublishEvent(event)
@@ -108,8 +109,11 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (*scenario.TestR
 			err = r.player.PublishContextEvent(event.Type, event.Location, event.Data)
 		case "media":
 			err = r.player.PublishMediaEvent(event.Location, event.Data)
+		case "behavior":
+			r.logger.Printf("BEHAVIOR EVENT DETECTED - calling PublishBehaviorEvent")
+			err = r.player.PublishBehaviorEvent(event.Location, event.Data)
 		default:
-			err = fmt.Errorf("unknown event category")
+			err = fmt.Errorf("unknown event category: %s", event.Category())
 		}
 
 		if err != nil {
