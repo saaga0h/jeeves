@@ -5,13 +5,17 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/saaga0h/jeeves-platform/e2e/internal/executor"
 	"github.com/saaga0h/jeeves-platform/e2e/internal/reporter"
 	"github.com/saaga0h/jeeves-platform/e2e/internal/scenario"
+	"github.com/saaga0h/jeeves-platform/pkg/config"
+	"github.com/saaga0h/jeeves-platform/pkg/postgres"
 )
 
 func main() {
@@ -58,21 +62,37 @@ func main() {
 	// Parse PostgreSQL host:port from flag (which gets env override) or use default
 	postgresHostPort := *postgresHost
 
-	// Split host:port
+	// Create main config and set postgres values
+	cfg := config.NewConfig()
+
+	// Split host:port for postgres config
 	parts := strings.Split(postgresHostPort, ":")
-	pgHost := parts[0]
-	pgPort := "5432" // default
+	cfg.PostgresHost = parts[0]
 	if len(parts) > 1 {
-		pgPort = parts[1]
+		if port, err := strconv.Atoi(parts[1]); err == nil {
+			cfg.PostgresPort = port
+		}
+	} else {
+		cfg.PostgresPort = 5432 // default
 	}
 
-	// Construct connection string
-	postgresConn := fmt.Sprintf(
-		"host=%s port=%s user=jeeves password=jeeves_test dbname=jeeves_behavior sslmode=disable",
-		pgHost, pgPort,
-	)
+	cfg.PostgresUser = "jeeves"
+	cfg.PostgresPassword = "jeeves_test"
+	cfg.PostgresDB = "jeeves_behavior"
+	cfg.PostgresSSLMode = "disable"
 
-	runner := executor.NewRunner(*mqttBroker, *redisHost, postgresConn, logger)
+	// Create slog logger from log logger
+	slogger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	pgClient := postgres.NewClient(cfg, slogger)
+	if err := pgClient.Connect(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to connect to postgres: %v\n", err)
+		os.Exit(1)
+	}
+
+	runner := executor.NewRunner(*mqttBroker, *redisHost, pgClient, logger)
 
 	// postgresConn := fmt.Sprintf("host=%s port=5432 user=jeeves password=jeeves_test dbname=jeeves_behavior sslmode=disable",
 	// 	os.Getenv("POSTGRES_HOST"))

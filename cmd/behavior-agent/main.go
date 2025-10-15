@@ -8,10 +8,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	_ "github.com/lib/pq"
 	"github.com/saaga0h/jeeves-platform/internal/behavior"
 	"github.com/saaga0h/jeeves-platform/pkg/config"
 	"github.com/saaga0h/jeeves-platform/pkg/mqtt"
+	"github.com/saaga0h/jeeves-platform/pkg/postgres"
 	"github.com/saaga0h/jeeves-platform/pkg/redis"
 )
 
@@ -47,8 +47,13 @@ func main() {
 	mqttClient := mqtt.NewClient(cfg, logger)
 	redisClient := redis.NewClient(cfg, logger)
 
-	// Create behavior agent
-	agent, err := behavior.NewAgent(mqttClient, redisClient, cfg, logger)
+	// Initialize and connect postgres client
+	pgClient := postgres.NewClient(cfg, logger)
+	if err := pgClient.Connect(ctx); err != nil {
+		logger.Error("Failed to connect to postgres", "error", err)
+		os.Exit(1)
+	} // Create behavior agent
+	agent, err := behavior.NewAgent(mqttClient, redisClient, pgClient, cfg, logger)
 	if err != nil {
 		logger.Error("Failed to create agent", "error", err)
 		os.Exit(1)

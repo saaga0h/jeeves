@@ -13,13 +13,14 @@ import (
 	"github.com/saaga0h/jeeves-platform/e2e/internal/observer"
 	"github.com/saaga0h/jeeves-platform/e2e/internal/reporter"
 	"github.com/saaga0h/jeeves-platform/e2e/internal/scenario"
+	"github.com/saaga0h/jeeves-platform/pkg/postgres"
 )
 
 // Runner orchestrates test scenario execution
 type Runner struct {
 	mqttBroker      string
 	redisHost       string
-	postgresConn    string
+	pgClient        postgres.Client
 	logger          *log.Logger
 	observer        *observer.Observer
 	player          *MQTTPlayer
@@ -28,16 +29,16 @@ type Runner struct {
 }
 
 // NewRunner creates a new test runner
-func NewRunner(mqttBroker, redisHost, postgresConn string, logger *log.Logger) *Runner {
+func NewRunner(mqttBroker, redisHost string, pgClient postgres.Client, logger *log.Logger) *Runner {
 	if logger == nil {
 		logger = log.Default()
 	}
 
 	return &Runner{
-		mqttBroker:   mqttBroker,
-		redisHost:    redisHost,
-		postgresConn: postgresConn,
-		logger:       logger,
+		mqttBroker: mqttBroker,
+		redisHost:  redisHost,
+		pgClient:   pgClient,
+		logger:     logger,
 	}
 }
 
@@ -280,9 +281,9 @@ func (r *Runner) initialize() error {
 
 	r.logger.Printf("Connected to Redis at %s", r.redisHost)
 
-	// Create Postgres checker (if connection string provided)
-	if r.postgresConn != "" {
-		postgresChecker, err := checker.NewPostgresChecker(r.postgresConn, r.logger)
+	// Create Postgres checker (if client provided)
+	if r.pgClient != nil {
+		postgresChecker, err := checker.NewPostgresChecker(r.pgClient, r.logger)
 		if err != nil {
 			return fmt.Errorf("failed to create Postgres checker: %w", err)
 		}

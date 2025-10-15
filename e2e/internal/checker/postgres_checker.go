@@ -1,39 +1,36 @@
 package checker
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"log"
 	"strconv"
 	"strings"
 
-	_ "github.com/lib/pq"
+	"github.com/saaga0h/jeeves-platform/pkg/postgres"
 )
 
 // PostgresChecker validates database state
 type PostgresChecker struct {
-	db     *sql.DB
-	logger *log.Logger
+	pgClient postgres.Client
+	logger   *log.Logger
 }
 
 // NewPostgresChecker creates a new Postgres checker
-func NewPostgresChecker(connStr string, logger *log.Logger) (*PostgresChecker, error) {
+func NewPostgresChecker(pgClient postgres.Client, logger *log.Logger) (*PostgresChecker, error) {
 	if logger == nil {
 		logger = log.Default()
 	}
 
-	db, err := sql.Open("postgres", connStr)
+	// Test connection with health check
+	_, err := pgClient.HealthCheck(context.Background())
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to postgres: %w", err)
-	}
-
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("failed to ping postgres: %w", err)
+		return nil, fmt.Errorf("postgres health check failed: %w", err)
 	}
 
 	logger.Printf("Connected to Postgres")
 
-	return &PostgresChecker{db: db, logger: logger}, nil
+	return &PostgresChecker{pgClient: pgClient, logger: logger}, nil
 }
 
 // CheckQuery executes a query and compares result
@@ -41,7 +38,7 @@ func (p *PostgresChecker) CheckQuery(query string, expected interface{}) error {
 	p.logger.Printf("Executing query: %s", query)
 
 	var result interface{}
-	err := p.db.QueryRow(query).Scan(&result)
+	err := p.pgClient.QueryRow(context.Background(), query).Scan(&result)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
 	}
@@ -105,8 +102,8 @@ func (p *PostgresChecker) compareApproximate(actual interface{}, expectedStr str
 
 // Close closes the database connection
 func (p *PostgresChecker) Close() error {
-	if p.db != nil {
-		return p.db.Close()
+	if p.pgClient != nil {
+		return p.pgClient.Disconnect()
 	}
 	return nil
 }

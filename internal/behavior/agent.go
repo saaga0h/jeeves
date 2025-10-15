@@ -2,7 +2,6 @@ package behavior
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -13,15 +12,16 @@ import (
 	"github.com/saaga0h/jeeves-platform/pkg/config"
 	"github.com/saaga0h/jeeves-platform/pkg/mqtt"
 	"github.com/saaga0h/jeeves-platform/pkg/ontology"
+	"github.com/saaga0h/jeeves-platform/pkg/postgres"
 	"github.com/saaga0h/jeeves-platform/pkg/redis"
 )
 
 type Agent struct {
-	mqtt   mqtt.Client
-	redis  redis.Client
-	db     *sql.DB
-	cfg    *config.Config
-	logger *slog.Logger
+	mqtt     mqtt.Client
+	redis    redis.Client
+	pgClient postgres.Client
+	cfg      *config.Config
+	logger   *slog.Logger
 
 	timeManager        *TimeManager      // NEW
 	activeEpisodes     map[string]string // location → episode ID
@@ -29,23 +29,11 @@ type Agent struct {
 	stateMux           sync.RWMutex
 }
 
-func NewAgent(mqttClient mqtt.Client, redisClient redis.Client, cfg *config.Config, logger *slog.Logger) (*Agent, error) {
-	// Connect to Postgres using config
-	connStr := cfg.PostgresConnectionString()
-
-	db, err := sql.Open("postgres", connStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to postgres: %w", err)
-	}
-
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("failed to ping postgres: %w", err)
-	}
-
+func NewAgent(mqttClient mqtt.Client, redisClient redis.Client, pgClient postgres.Client, cfg *config.Config, logger *slog.Logger) (*Agent, error) {
 	return &Agent{
 		mqtt:               mqttClient,
 		redis:              redisClient,
-		db:                 db,
+		pgClient:           pgClient,
 		cfg:                cfg,
 		logger:             logger,
 		timeManager:        NewTimeManager(logger), // NEW
@@ -91,8 +79,7 @@ func (a *Agent) Start(ctx context.Context) error {
 func (a *Agent) Stop() error {
 	a.logger.Info("Stopping behavior agent")
 	a.mqtt.Disconnect()
-	a.db.Close()
-	return nil
+	return a.pgClient.Disconnect()
 }
 
 func (a *Agent) handleMessage(msg mqtt.Message) {
@@ -167,7 +154,7 @@ func (a *Agent) startEpisode(location string) {
 	jsonld, _ := json.Marshal(episode)
 
 	var id string
-	err := a.db.QueryRow(
+	err := a.pgClient.QueryRow(context.Background(),
 		"INSERT INTO behavioral_episodes (jsonld) VALUES ($1) RETURNING id",
 		jsonld,
 	).Scan(&id)
@@ -195,7 +182,7 @@ func (a *Agent) endEpisode(location string, reason string) {
 
 	now := a.timeManager.Now() // Changed from time.Now()
 
-	_, err := a.db.Exec(
+	_, err := a.pgClient.Exec(context.Background(),
 		"UPDATE behavioral_episodes SET jsonld = jsonb_set(jsonld, '{jeeves:endedAt}', to_jsonb($1::text)) WHERE id = $2",
 		now.Format(time.RFC3339),
 		id,

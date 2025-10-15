@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/spf13/pflag"
 )
@@ -29,6 +30,12 @@ type Config struct {
 	PostgresUser     string
 	PostgresPassword string
 	PostgresDB       string
+	PostgresSSLMode  string
+
+	// PostgreSQL connection pool settings
+	PostgresMaxConnections     int
+	PostgresMaxIdleConnections int
+	PostgresConnMaxLifetime    time.Duration
 
 	// Service configuration
 	ServiceName string
@@ -64,27 +71,31 @@ type Config struct {
 // NewConfig creates a new Config with default values
 func NewConfig() *Config {
 	return &Config{
-		MQTTBroker:            "localhost",
-		MQTTPort:              1883,
-		MQTTUser:              "",
-		MQTTPassword:          "",
-		MQTTClientID:          "",
-		RedisHost:             "localhost",
-		RedisPort:             6379,
-		RedisPassword:         "",
-		RedisDB:               0,
-		PostgresHost:          "localhost",
-		PostgresPort:          5432,
-		PostgresUser:          "postgres",
-		PostgresPassword:      "",
-		PostgresDB:            "postgres",
-		ServiceName:           "jeeves-agent",
-		HealthPort:            8080,
-		LogLevel:              "info",
-		SensorTopics:          []string{"automation/raw/+/+"},
-		MaxSensorHistory:      1000,
-		EnableVictoriaMetrics: false,
-		VictoriaMetricsURL:    "",
+		MQTTBroker:                 "localhost",
+		MQTTPort:                   1883,
+		MQTTUser:                   "",
+		MQTTPassword:               "",
+		MQTTClientID:               "",
+		RedisHost:                  "localhost",
+		RedisPort:                  6379,
+		RedisPassword:              "",
+		RedisDB:                    0,
+		PostgresHost:               "localhost",
+		PostgresPort:               5432,
+		PostgresUser:               "postgres",
+		PostgresPassword:           "",
+		PostgresDB:                 "postgres",
+		PostgresSSLMode:            "disable",
+		PostgresMaxConnections:     10,
+		PostgresMaxIdleConnections: 5,
+		PostgresConnMaxLifetime:    5 * time.Minute,
+		ServiceName:                "jeeves-agent",
+		HealthPort:                 8080,
+		LogLevel:                   "info",
+		SensorTopics:               []string{"automation/raw/+/+"},
+		MaxSensorHistory:           1000,
+		EnableVictoriaMetrics:      false,
+		VictoriaMetricsURL:         "",
 		// Illuminance agent defaults (Helsinki coordinates)
 		Latitude:            60.1695,
 		Longitude:           24.9354,
@@ -160,6 +171,24 @@ func (c *Config) LoadFromEnv() {
 	}
 	if v := os.Getenv("JEEVES_POSTGRES_DB"); v != "" {
 		c.PostgresDB = v
+	}
+	if v := os.Getenv("JEEVES_POSTGRES_SSLMODE"); v != "" {
+		c.PostgresSSLMode = v
+	}
+	if v := os.Getenv("JEEVES_POSTGRES_MAX_OPEN_CONNS"); v != "" {
+		if maxConns, err := strconv.Atoi(v); err == nil {
+			c.PostgresMaxConnections = maxConns
+		}
+	}
+	if v := os.Getenv("JEEVES_POSTGRES_MAX_IDLE_CONNS"); v != "" {
+		if maxIdle, err := strconv.Atoi(v); err == nil {
+			c.PostgresMaxIdleConnections = maxIdle
+		}
+	}
+	if v := os.Getenv("JEEVES_POSTGRES_CONN_MAX_LIFE"); v != "" {
+		if duration, err := time.ParseDuration(v); err == nil {
+			c.PostgresConnMaxLifetime = duration
+		}
 	}
 
 	// Service configuration
@@ -279,6 +308,10 @@ func (c *Config) LoadFromFlags() {
 	pflag.StringVar(&c.PostgresUser, "postgres-user", c.PostgresUser, "PostgreSQL username")
 	pflag.StringVar(&c.PostgresPassword, "postgres-password", c.PostgresPassword, "PostgreSQL password")
 	pflag.StringVar(&c.PostgresDB, "postgres-db", c.PostgresDB, "PostgreSQL database name")
+	pflag.StringVar(&c.PostgresSSLMode, "postgres-sslmode", c.PostgresSSLMode, "PostgreSQL SSL mode")
+	pflag.IntVar(&c.PostgresMaxConnections, "postgres-max-conns", c.PostgresMaxConnections, "PostgreSQL max connections")
+	pflag.IntVar(&c.PostgresMaxIdleConnections, "postgres-max-idle-conns", c.PostgresMaxIdleConnections, "PostgreSQL max idle connections")
+	pflag.DurationVar(&c.PostgresConnMaxLifetime, "postgres-conn-max-life", c.PostgresConnMaxLifetime, "PostgreSQL connection max lifetime")
 
 	// Service flags
 	pflag.StringVar(&c.ServiceName, "service-name", c.ServiceName, "Service name")
@@ -359,7 +392,6 @@ func (c *Config) RedisAddress() string {
 
 // PostgresConnectionString returns a PostgreSQL connection string
 func (c *Config) PostgresConnectionString() string {
-	sslmode := "disable" // Default for local development
 	return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		c.PostgresHost, c.PostgresPort, c.PostgresUser, c.PostgresPassword, c.PostgresDB, sslmode)
+		c.PostgresHost, c.PostgresPort, c.PostgresUser, c.PostgresPassword, c.PostgresDB, c.PostgresSSLMode)
 }
