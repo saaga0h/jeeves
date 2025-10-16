@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/saaga0h/jeeves-platform/pkg/config"
+	"github.com/saaga0h/jeeves-platform/pkg/llm"
 	"github.com/saaga0h/jeeves-platform/pkg/mqtt"
 	"github.com/saaga0h/jeeves-platform/pkg/ontology"
 	"github.com/saaga0h/jeeves-platform/pkg/postgres"
@@ -103,17 +104,7 @@ func (a *Agent) handleMessage(msg mqtt.Message) {
 }
 
 func (a *Agent) handleOccupancyMessage(msg mqtt.Message) {
-	var data struct {
-		State      string  `json:"state"`
-		Confidence float64 `json:"confidence"`
-	}
-
-	if err := json.Unmarshal(msg.Payload(), &data); err != nil {
-		a.logger.Error("Failed to parse occupancy", "error", err)
-		return
-	}
-
-	// Extract location from topic: automation/context/occupancy/{location}
+	// Extract location from topic first
 	parts := strings.Split(msg.Topic(), "/")
 	if len(parts) < 4 {
 		a.logger.Error("Invalid occupancy topic format", "topic", msg.Topic())
@@ -121,22 +112,72 @@ func (a *Agent) handleOccupancyMessage(msg mqtt.Message) {
 	}
 	location := parts[3]
 
-	a.stateMux.Lock()
-	defer a.stateMux.Unlock()
-
-	previousState := a.lastOccupancyState[location]
-	currentState := data.State
-
-	a.lastOccupancyState[location] = currentState
-
-	// Detect transitions
-	if previousState != "occupied" && currentState == "occupied" {
-		a.startEpisode(location)
+	// Try simple format first ({"state": "occupied", "confidence": 0.85})
+	var simple struct {
+		State      string  `json:"state"`
+		Confidence float64 `json:"confidence"`
 	}
 
-	if previousState == "occupied" && currentState == "empty" {
-		a.endEpisode(location, "occupancy_empty")
+	if err := json.Unmarshal(msg.Payload(), &simple); err == nil && simple.State != "" {
+		a.stateMux.Lock()
+		defer a.stateMux.Unlock()
+
+		previousState := a.lastOccupancyState[location]
+		currentState := simple.State
+
+		a.lastOccupancyState[location] = currentState
+
+		a.logger.Debug("Occupancy state update",
+			"location", location,
+			"previous", previousState,
+			"current", currentState,
+			"transition", fmt.Sprintf("%s→%s", previousState, currentState))
+
+		// Detect transitions
+		if previousState != "occupied" && currentState == "occupied" {
+			a.startEpisode(location)
+		}
+
+		if previousState == "occupied" && currentState == "empty" {
+			a.endEpisode(location, "occupancy_empty")
+		}
+		return
 	}
+
+	// Try nested format ({"data": {"occupied": true, "confidence": 0.8, ...}})
+	var nested struct {
+		Data struct {
+			Occupied   bool    `json:"occupied"`
+			Confidence float64 `json:"confidence"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(msg.Payload(), &nested); err == nil {
+		a.stateMux.Lock()
+		defer a.stateMux.Unlock()
+
+		previousState := a.lastOccupancyState[location]
+		currentState := "empty"
+		if nested.Data.Occupied {
+			currentState = "occupied"
+		}
+
+		a.lastOccupancyState[location] = currentState
+
+		// Detect transitions
+		if previousState != "occupied" && currentState == "occupied" {
+			a.startEpisode(location)
+		}
+
+		if previousState == "occupied" && currentState == "empty" {
+			a.endEpisode(location, "occupancy_empty")
+		}
+		return
+	}
+
+	a.logger.Warn("Failed to parse occupancy message in any known format",
+		"topic", msg.Topic(),
+		"payload", string(msg.Payload()))
 }
 
 func (a *Agent) startEpisode(location string) {
@@ -215,6 +256,164 @@ func (a *Agent) publishEpisodeEvent(eventType string, data map[string]interface{
 	topic := fmt.Sprintf("automation/behavior/episode/%s", eventType)
 	payload, _ := json.Marshal(data)
 	a.mqtt.Publish(topic, 0, false, payload)
+}
+
+func (a *Agent) performConsolidation(ctx context.Context, sinceTime time.Time, location string) error {
+	a.logger.Info("=== CONSOLIDATION ORCHESTRATION START ===",
+		"since", sinceTime.Format(time.RFC3339),
+		"location", location,
+		"virtual_time", a.timeManager.Now().Format(time.RFC3339))
+
+	// STEP 1: Get unconsolidated episodes from database
+	episodes, err := a.getUnconsolidatedEpisodes(ctx, sinceTime, location)
+	if err != nil {
+		a.logger.Error("Failed to get unconsolidated episodes", "error", err)
+		return fmt.Errorf("failed to get unconsolidated episodes: %w", err)
+	}
+
+	if len(episodes) == 0 {
+		a.logger.Info("No episodes to consolidate - orchestration complete")
+		return nil
+	}
+
+	// Log what we found
+	a.logger.Info("Episodes retrieved for consolidation",
+		"count", len(episodes),
+		"time_range", fmt.Sprintf("%s to %s",
+			episodes[0].StartedAt.Format("15:04:05"),
+			episodes[len(episodes)-1].StartedAt.Format("15:04:05")))
+
+	// Log episode details for debugging
+	for i, ep := range episodes {
+		duration := "ongoing"
+		if ep.EndedAt != nil {
+			duration = fmt.Sprintf("%.1fm", ep.EndedAt.Sub(ep.StartedAt).Minutes())
+		}
+		a.logger.Debug("Episode details",
+			"index", i,
+			"id", ep.ID,
+			"location", ep.Location,
+			"started", ep.StartedAt.Format("15:04:05"),
+			"duration", duration,
+			"trigger", ep.TriggerType)
+	}
+
+	totalMacrosCreated := 0
+
+	// STEP 2: Rule-based consolidation
+	a.logger.Info("--- PHASE 1: RULE-BASED CONSOLIDATION ---")
+
+	ruleMacros := consolidateMicroEpisodesRuleBased(episodes, a.cfg.ConsolidationMaxGapMinutes, a.logger)
+
+	a.logger.Info("Rule-based consolidation completed",
+		"macros_generated", len(ruleMacros),
+		"max_gap_minutes", a.cfg.ConsolidationMaxGapMinutes)
+
+	// Store rule-based macros
+	for i, macro := range ruleMacros {
+		a.logger.Debug("Storing rule-based macro",
+			"index", i,
+			"id", macro.ID,
+			"pattern", macro.PatternType,
+			"locations", macro.Locations,
+			"duration_min", macro.DurationMinutes,
+			"micro_count", len(macro.MicroEpisodeIDs))
+
+		if err := a.createMacroEpisode(ctx, macro); err != nil {
+			a.logger.Error("Failed to create rule-based macro-episode",
+				"error", err,
+				"macro_id", macro.ID)
+		} else {
+			totalMacrosCreated++
+			a.logger.Info("Rule-based macro-episode stored",
+				"macro_id", macro.ID,
+				"summary", macro.Summary)
+		}
+	}
+
+	// STEP 3: Get remaining episodes for LLM
+	a.logger.Info("--- PHASE 2: LLM CONSOLIDATION ---")
+
+	remainingEpisodes, err := a.getUnconsolidatedEpisodes(ctx, sinceTime, location)
+	if err != nil {
+		a.logger.Error("Failed to get remaining episodes for LLM", "error", err)
+	} else {
+		a.logger.Info("Remaining episodes after rule-based consolidation",
+			"count", len(remainingEpisodes))
+
+		if len(remainingEpisodes) >= 2 {
+			// Create LLM client
+			llmClient := llm.NewOllamaClient(a.cfg.LLMEndpoint, a.logger)
+
+			// Check LLM health
+			healthCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
+			if err := llmClient.Health(healthCtx); err != nil {
+				a.logger.Warn("LLM not available, skipping LLM consolidation",
+					"error", err,
+					"endpoint", a.cfg.LLMEndpoint)
+			} else {
+				a.logger.Info("LLM available, starting LLM consolidation",
+					"endpoint", a.cfg.LLMEndpoint,
+					"model", a.cfg.LLMModel,
+					"min_confidence", a.cfg.LLMMinConfidence)
+
+				// LLM consolidation
+				llmMacros, err := consolidateWithLLM(
+					ctx,
+					remainingEpisodes,
+					llmClient,
+					a.cfg,
+					a.logger,
+					a.timeManager.Now(),
+				)
+
+				if err != nil {
+					a.logger.Error("LLM consolidation failed", "error", err)
+				} else {
+					a.logger.Info("LLM consolidation completed",
+						"macros_generated", len(llmMacros))
+
+					// Store LLM macros
+					for i, macro := range llmMacros {
+						a.logger.Debug("Storing LLM macro",
+							"index", i,
+							"id", macro.ID,
+							"pattern", macro.PatternType,
+							"locations", macro.Locations,
+							"duration_min", macro.DurationMinutes,
+							"micro_count", len(macro.MicroEpisodeIDs))
+
+						if err := a.createMacroEpisode(ctx, macro); err != nil {
+							a.logger.Error("Failed to create LLM macro-episode",
+								"error", err,
+								"macro_id", macro.ID)
+						} else {
+							totalMacrosCreated++
+							a.logger.Info("LLM macro-episode stored",
+								"macro_id", macro.ID,
+								"summary", macro.Summary)
+						}
+					}
+				}
+			}
+		} else {
+			a.logger.Info("Not enough remaining episodes for LLM consolidation",
+				"count", len(remainingEpisodes),
+				"required", 2)
+		}
+	}
+
+	// STEP 4: Final summary
+	a.logger.Info("=== CONSOLIDATION ORCHESTRATION COMPLETE ===",
+		"total_episodes_input", len(episodes),
+		"rule_based_macros", len(ruleMacros),
+		"total_macros_created", totalMacrosCreated)
+
+	a.publishConsolidationResult(totalMacrosCreated, len(episodes))
+
+	return nil
 }
 
 // Stubs for other handlers (implement in later iterations)

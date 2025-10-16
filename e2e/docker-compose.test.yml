@@ -152,6 +152,11 @@ services:
       JEEVES_POSTGRES_PASSWORD: "jeeves_test"
       JEEVES_POSTGRES_PORT: 5432
       JEEVES_LOG_LEVEL: "debug"
+      JEEVES_LLM_ENDPOINT: http://host.docker.internal:11434
+      JEEVES_LLM_MODEL: mixtral:8x7b
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   # Testing infrastructure
   observer:

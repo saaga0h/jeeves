@@ -1,0 +1,1136 @@
+diff --git a/README.md b/README.md
+index 6384749..a1fe3e2 100644
+--- a/README.md
++++ b/README.md
+@@ -11,7 +11,7 @@ J.E.E.V.E.S. Platform 2.0 is a complete rewrite of the Node.js-based home automa
+ - **Collector Agent**: Receives raw sensor data, stores in Redis, publishes triggers
+ - **Illuminance Agent**: Monitors light levels and adjusts lighting automatically
+ - **Light Agent**: Bridges MQTT commands with physical lights
+-- **Occupancy Agent**: Detects and tracks room occupancy patterns
++- **Occupancy Agent**: Uses advanced pattern recognition and AI to detect room occupancy from motion sensors
+ 
+ ## Architecture Principles
+ 
+@@ -146,40 +146,53 @@ The Collector Agent is the **central data hub** that receives all sensor data an
+ 
+ See [docs/collector/](docs/collector/) for complete documentation.
+ 
+-### Illuminance Agent (🚧 Stub)
++### Illuminance Agent
+ 
+-Monitors light levels and automatically adjusts lighting.
++Analyzes room lighting conditions and provides intelligent context for other automation agents.
+ 
+-**TODO:**
+-- Subscribe to illuminance sensor topics
+-- Implement light level monitoring
+-- Implement automated light adjustment based on thresholds
+-
+-See [docs/illuminance/](docs/illuminance/) for specifications.
++**Key Features:**
++- **Lighting Analysis**: Categorizes lighting (dark/dim/moderate/bright/very_bright) with trend analysis
++- **Context Publishing**: Publishes rich lighting context via MQTT for other agents to use
++- **Temporal Intelligence**: Tracks lighting patterns, stability, and typical levels over time
++- **Smart Fallbacks**: Uses astronomical calculations when sensor data is unavailable
++- **Integration Ready**: Powers smart lighting decisions for the Light Agent
+ 
+-### Light Agent (🚧 Stub)
++See [docs/illuminance/](docs/illuminance/) for complete guides on how it works, message formats, MQTT integration, and Redis data requirements.
+ 
+-Bridges MQTT commands with Matter/physical lights.
++### Light Agent
+ 
+-**TODO:**
+-- Subscribe to light command topics
+-- Implement Matter protocol integration
+-- Handle light state commands (on, off, brightness, color)
+-- Publish light state updates
++Intelligent lighting automation that responds to occupancy and environmental conditions.
+ 
+-See [docs/light/](docs/light/) for specifications.
++**Key Features:**
++- **Smart Decision Making**: Automatically turns lights on/off based on room occupancy and current lighting conditions
++- **Context-Aware Brightness**: Adjusts brightness based on time of day, natural light availability, and lighting history
++- **Circadian Color Temperature**: Uses warmer colors in evening (2400K-2700K) and cooler during day (4500K-5500K)
++- **Manual Override System**: Temporarily disables automation when manual control is detected
++- **Rate Limiting**: Prevents light flickering with intelligent decision timing
++- **Multi-Strategy Analysis**: Uses recent sensor data, historical patterns, or time-based fallbacks for reliable operation
+ 
+-### Occupancy Agent (🚧 Stub)
++See [docs/light/](docs/light/) for complete guides on how it works, decision logic, MQTT integration, manual override API, and troubleshooting.
+ 
+-Detects and tracks room occupancy patterns.
++### Occupancy Agent
+ 
+-**TODO:**
+-- Subscribe to motion/occupancy sensor topics
+-- Implement occupancy detection logic
+-- Track behavioral patterns
+-- Publish occupancy status updates
++Provides intelligent room occupancy detection using advanced temporal pattern analysis and machine learning. Converts unreliable motion sensor signals into confident occupancy predictions.
+ 
+-See [docs/occupancy/](docs/occupancy/) for specifications.
++**Key Features:**
++- **AI-Powered Analysis**: Uses local LLM (Ollama) to interpret complex motion patterns with human-readable reasoning
++- **Temporal Pattern Recognition**: Analyzes motion across multiple time scales to distinguish "person working" from "person left room"
++- **Anti-Oscillation Technology**: Vonich-Hakim stabilization prevents rapid state changes from boundary sensor conditions
++- **Pass-Through Detection**: Identifies when someone walked through vs. stayed in a room
++- **Confidence Scoring**: Provides reliability metrics for downstream automation decisions
++- **Settling Behavior Recognition**: Detects when someone enters and sits down (working, reading, watching TV)
++
++**Smart Capabilities:**
++- Immediate response to room entries (< 1 second)
++- Distinguishes active presence from quiet presence
++- Handles sensor noise and environmental factors
++- Adapts to different room types and usage patterns
++- Falls back gracefully when AI components unavailable
++
++See [docs/occupancy/](docs/occupancy/) for complete guides on how the intelligent analysis works, pattern recognition algorithms, MQTT integration, and troubleshooting.
+ 
+ ## Deployment
+ 
+diff --git a/internal/behavior/agent.go b/internal/behavior/agent.go
+index ac428f0..a67f2a4 100644
+--- a/internal/behavior/agent.go
++++ b/internal/behavior/agent.go
+@@ -10,6 +10,7 @@ import (
+ 	"time"
+ 
+ 	"github.com/saaga0h/jeeves-platform/pkg/config"
++	"github.com/saaga0h/jeeves-platform/pkg/llm"
+ 	"github.com/saaga0h/jeeves-platform/pkg/mqtt"
+ 	"github.com/saaga0h/jeeves-platform/pkg/ontology"
+ 	"github.com/saaga0h/jeeves-platform/pkg/postgres"
+@@ -17,26 +18,36 @@ import (
+ )
+ 
+ type Agent struct {
+-	mqtt     mqtt.Client
+-	redis    redis.Client
+-	pgClient postgres.Client
+-	cfg      *config.Config
+-	logger   *slog.Logger
+-
+-	timeManager        *TimeManager      // NEW
++	mqtt      mqtt.Client
++	redis     redis.Client
++	pgClient  postgres.Client
++	cfg       *config.Config
++	logger    *slog.Logger
++	llmClient llm.Client
++
++	timeManager        *TimeManager
+ 	activeEpisodes     map[string]string // location → episode ID
+ 	lastOccupancyState map[string]string // location → "occupied" | "empty"
+ 	stateMux           sync.RWMutex
+ }
+ 
+-func NewAgent(mqttClient mqtt.Client, redisClient redis.Client, pgClient postgres.Client, cfg *config.Config, logger *slog.Logger) (*Agent, error) {
++func NewAgent(
++	mqttClient mqtt.Client,
++	redisClient redis.Client,
++	pgClient postgres.Client,
++	cfg *config.Config,
++	logger *slog.Logger,
++) (*Agent, error) {
++	llmClient := llm.NewOllamaClient(cfg.LLMEndpoint, logger)
++
+ 	return &Agent{
+ 		mqtt:               mqttClient,
+ 		redis:              redisClient,
+ 		pgClient:           pgClient,
+ 		cfg:                cfg,
+ 		logger:             logger,
+-		timeManager:        NewTimeManager(logger), // NEW
++		llmClient:          llmClient,
++		timeManager:        NewTimeManager(logger),
+ 		activeEpisodes:     make(map[string]string),
+ 		lastOccupancyState: make(map[string]string),
+ 	}, nil
+@@ -45,22 +56,23 @@ func NewAgent(mqttClient mqtt.Client, redisClient redis.Client, pgClient postgre
+ func (a *Agent) Start(ctx context.Context) error {
+ 	a.logger.Info("Starting behavior agent")
+ 
++	// Check LLM health
++	if err := a.llmClient.Health(ctx); err != nil {
++		a.logger.Warn("LLM health check failed", "error", err)
++	} else {
++		a.logger.Info("LLM client healthy", "endpoint", a.cfg.LLMEndpoint)
++	}
++
+ 	// Connect to MQTT
+ 	if err := a.mqtt.Connect(ctx); err != nil {
+ 		return fmt.Errorf("failed to connect to MQTT: %w", err)
+ 	}
+ 
+-	// NEW: Subscribe to test mode configuration
+-	if err := a.timeManager.ConfigureFromMQTT(a.mqtt); err != nil {
+-		a.logger.Warn("Failed to subscribe to test mode config", "error", err)
+-		// Not fatal - continue without test mode support
+-	}
+-
+-	// Subscribe to context topics
++	// Subscribe to topics
+ 	topics := []string{
+ 		"automation/context/occupancy/+",
+ 		"automation/context/lighting/+",
+-		"automation/media/+/+", // New: media events
++		"automation/media/+/+",
+ 	}
+ 
+ 	for _, topic := range topics {
+@@ -69,17 +81,16 @@ func (a *Agent) Start(ctx context.Context) error {
+ 		}
+ 	}
+ 
+-	// NEW: Subscribe to manual consolidation trigger
++	// Subscribe to consolidation trigger
+ 	if err := a.mqtt.Subscribe("automation/behavior/consolidate", 0, a.handleConsolidationTrigger); err != nil {
+ 		a.logger.Warn("Failed to subscribe to consolidation trigger", "error", err)
+ 	}
+ 
+ 	a.logger.Info("Subscribed to topics", "topics", topics)
+ 
+-	// NEW: Start automatic consolidation job
++	// Start consolidation job
+ 	go a.runConsolidationJob(ctx)
+ 
+-	// Block until context cancelled
+ 	<-ctx.Done()
+ 	return nil
+ }
+@@ -113,36 +124,37 @@ func (a *Agent) handleOccupancyMessage(msg mqtt.Message) {
+ 		return
+ 	}
+ 
+-	// Extract location from topic: automation/context/occupancy/{location}
+ 	parts := strings.Split(msg.Topic(), "/")
+ 	if len(parts) < 4 {
+-		a.logger.Error("Invalid occupancy topic format", "topic", msg.Topic())
++		a.logger.Error("Invalid occupancy topic", "topic", msg.Topic())
+ 		return
+ 	}
+ 	location := parts[3]
+ 
+-	a.stateMux.Lock()
+-	defer a.stateMux.Unlock()
+-
++	a.stateMux.RLock()
+ 	previousState := a.lastOccupancyState[location]
+-	currentState := data.State
++	a.stateMux.RUnlock()
+ 
+-	a.lastOccupancyState[location] = currentState
++	if previousState == data.State {
++		return
++	}
+ 
+-	// Detect transitions
+-	if previousState != "occupied" && currentState == "occupied" {
++	a.stateMux.Lock()
++	a.lastOccupancyState[location] = data.State
++	a.stateMux.Unlock()
++
++	if previousState != "occupied" && data.State == "occupied" {
+ 		a.startEpisode(location)
+ 	}
+ 
+-	if previousState == "occupied" && currentState == "empty" {
++	if previousState == "occupied" && data.State == "empty" {
+ 		a.endEpisode(location, "occupancy_empty")
+ 	}
+ }
+ 
+ func (a *Agent) startEpisode(location string) {
+-	now := a.timeManager.Now() // Changed from time.Now()
++	now := a.timeManager.Now()
+ 
+-	// Create episode with virtual time
+ 	episode := ontology.NewEpisode(
+ 		ontology.Activity{
+ 			Type: "adl:Present",
+@@ -155,10 +167,8 @@ func (a *Agent) startEpisode(location string) {
+ 		},
+ 	)
+ 
+-	// Override the timestamp with virtual time
+ 	episode.StartedAt = now
+ 
+-	// Store in Postgres
+ 	jsonld, _ := json.Marshal(episode)
+ 
+ 	var id string
+@@ -172,10 +182,12 @@ func (a *Agent) startEpisode(location string) {
+ 		return
+ 	}
+ 
++	a.stateMux.Lock()
+ 	a.activeEpisodes[location] = id
++	a.stateMux.Unlock()
++
+ 	a.logger.Info("Episode started", "location", location, "id", id)
+ 
+-	// Publish event
+ 	a.publishEpisodeEvent("started", map[string]interface{}{
+ 		"location":     location,
+ 		"trigger_type": "occupancy_transition",
+@@ -183,12 +195,15 @@ func (a *Agent) startEpisode(location string) {
+ }
+ 
+ func (a *Agent) endEpisode(location string, reason string) {
++	a.stateMux.RLock()
+ 	id, exists := a.activeEpisodes[location]
++	a.stateMux.RUnlock()
++
+ 	if !exists {
+ 		return
+ 	}
+ 
+-	now := a.timeManager.Now() // Changed from time.Now()
++	now := a.timeManager.Now()
+ 
+ 	_, err := a.pgClient.Exec(context.Background(),
+ 		"UPDATE behavioral_episodes SET jsonld = jsonb_set(jsonld, '{jeeves:endedAt}', to_jsonb($1::text)) WHERE id = $2",
+@@ -201,10 +216,12 @@ func (a *Agent) endEpisode(location string, reason string) {
+ 		return
+ 	}
+ 
++	a.stateMux.Lock()
+ 	delete(a.activeEpisodes, location)
++	a.stateMux.Unlock()
++
+ 	a.logger.Info("Episode ended", "location", location, "id", id)
+ 
+-	// Publish event
+ 	a.publishEpisodeEvent("closed", map[string]interface{}{
+ 		"location":   location,
+ 		"end_reason": reason,
+@@ -217,11 +234,276 @@ func (a *Agent) publishEpisodeEvent(eventType string, data map[string]interface{
+ 	a.mqtt.Publish(topic, 0, false, payload)
+ }
+ 
+-// Stubs for other handlers (implement in later iterations)
++func (a *Agent) publishConsolidationResult(macrosCreated, episodesProcessed int) {
++	result := map[string]interface{}{
++		"timestamp":                a.timeManager.Now().Format(time.RFC3339),
++		"macro_episodes_created":   macrosCreated,
++		"micro_episodes_processed": episodesProcessed,
++	}
++
++	payload, _ := json.Marshal(result)
++	a.mqtt.Publish("automation/behavior/consolidation", 0, false, payload)
++}
++
++// ===================================================================
++// CONSOLIDATION ORCHESTRATION - The Brain
++// ===================================================================
++
++func (a *Agent) performConsolidation(ctx context.Context, sinceTime time.Time, location string) error {
++	a.logger.Info("Starting consolidation", "since", sinceTime, "location", location)
++
++	// Get unconsolidated episodes from database
++	episodes, err := getUnconsolidatedEpisodes(ctx, a.pgClient, sinceTime, location, a.logger)
++	if err != nil {
++		return fmt.Errorf("failed to get episodes: %w", err)
++	}
++
++	if len(episodes) == 0 {
++		a.logger.Info("No episodes to consolidate")
++		return nil
++	}
++
++	a.logger.Info("Found episodes", "count", len(episodes))
++
++	// Sort episodes by time
++	sortEpisodesByStartTime(episodes)
++
++	var macrosCreated int
++
++	// STEP 1: Try rule-based consolidation first
++	ruleMacros, remaining := a.doRuleBasedConsolidation(ctx, episodes)
++	macrosCreated += len(ruleMacros)
++
++	a.logger.Info("Rule-based done", "macros", len(ruleMacros), "remaining", len(remaining))
++
++	// STEP 2: Use LLM for complex patterns if needed
++	if len(remaining) >= 2 && a.shouldUseLLM(ctx, remaining) {
++		a.logger.Info("Starting LLM consolidation", "episodes", len(remaining))
++
++		llmMacros, err := a.doLLMConsolidation(ctx, remaining)
++		if err != nil {
++			a.logger.Error("LLM consolidation failed", "error", err)
++		} else {
++			macrosCreated += len(llmMacros)
++			a.logger.Info("LLM done", "macros", len(llmMacros))
++		}
++	}
++
++	a.logger.Info("Consolidation complete",
++		"processed", len(episodes),
++		"macros_created", macrosCreated)
++
++	a.publishConsolidationResult(macrosCreated, len(episodes))
++
++	return nil
++}
++
++func (a *Agent) shouldUseLLM(ctx context.Context, episodes []*MicroEpisode) bool {
++	// Check LLM health
++	healthCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
++	defer cancel()
++
++	if err := a.llmClient.Health(healthCtx); err != nil {
++		a.logger.Warn("LLM not available", "error", err)
++		return false
++	}
++
++	// Use LLM for multi-location patterns
++	if hasMultipleLocations(episodes) {
++		return true
++	}
++
++	// Use LLM for complex temporal patterns
++	if hasComplexTemporalPatterns(episodes) {
++		return true
++	}
++
++	return false
++}
++
++func (a *Agent) doRuleBasedConsolidation(ctx context.Context, episodes []*MicroEpisode) ([]*MacroEpisode, []*MicroEpisode) {
++	var macros []*MacroEpisode
++	var remaining []*MicroEpisode
++
++	// Group by location
++	byLocation := groupByLocation(episodes)
++
++	for location, locationEpisodes := range byLocation {
++		if len(locationEpisodes) < 2 {
++			remaining = append(remaining, locationEpisodes...)
++			continue
++		}
++
++		sortEpisodesByStartTime(locationEpisodes)
++
++		var currentGroup []*MicroEpisode
++		currentGroup = append(currentGroup, locationEpisodes[0])
++
++		for i := 1; i < len(locationEpisodes); i++ {
++			prevEpisode := currentGroup[len(currentGroup)-1]
++			currentEpisode := locationEpisodes[i]
++
++			if canMergeSimple(prevEpisode, currentEpisode, a.cfg.ConsolidationMaxGapMinutes) {
++				currentGroup = append(currentGroup, currentEpisode)
++			} else {
++				// Save group if has multiple episodes
++				if len(currentGroup) > 1 {
++					macro := createMacroFromGroup(currentGroup, "occupancy_session", a.timeManager.Now())
++					if err := createMacroEpisode(ctx, a.pgClient, macro, a.logger); err != nil {
++						a.logger.Error("Failed to create macro", "error", err)
++					} else {
++						macros = append(macros, macro)
++					}
++				} else {
++					remaining = append(remaining, currentGroup[0])
++				}
++
++				currentGroup = []*MicroEpisode{currentEpisode}
++			}
++		}
++
++		// Handle last group
++		if len(currentGroup) > 1 {
++			macro := createMacroFromGroup(currentGroup, "occupancy_session", a.timeManager.Now())
++			if err := createMacroEpisode(ctx, a.pgClient, macro, a.logger); err != nil {
++				a.logger.Error("Failed to create macro", "error", err)
++			} else {
++				macros = append(macros, macro)
++			}
++		} else {
++			remaining = append(remaining, currentGroup[0])
++		}
++
++		a.logger.Debug("Processed location", "location", location, "macros", len(macros))
++	}
++
++	return macros, remaining
++}
++
++func (a *Agent) doLLMConsolidation(ctx context.Context, episodes []*MicroEpisode) ([]*MacroEpisode, error) {
++	if len(episodes) < 2 {
++		return nil, nil
++	}
++
++	// Group into time windows
++	windows := groupByTimeWindow(episodes, 2*time.Hour)
++
++	var macros []*MacroEpisode
++
++	for _, window := range windows {
++		if len(window) < 2 {
++			continue
++		}
++
++		// Skip if all same location (should have been handled by rules)
++		if allSameLocation(window) {
++			continue
++		}
++
++		// Prepare input for LLM
++		input := ConsolidationInput{
++			Episodes: window,
++			Context: ConsolidationContext{
++				TimeOfDay:        categorizeTimeOfDay(window[0].StartTime),
++				DayOfWeek:        window[0].StartTime.Weekday().String(),
++				LocationSequence: buildLocationSequence(window),
++				TotalDuration:    calculateTotalDuration(window),
++				Gaps:             calculateGaps(window),
++			},
++		}
++
++		// Call LLM
++		analyzer := NewConsolidationAnalyzer(a.cfg, a.logger)
++		output, err := llm.Analyze(ctx, a.llmClient, analyzer, a.cfg.LLMModel, input, a.logger)
++		if err != nil {
++			a.logger.Error("LLM analysis failed", "error", err)
++			continue
++		}
++
++		// Validate result
++		if !validateLLMResult(output, window, a.cfg.ConsolidationMaxGapMinutes, a.cfg.LLMMinConfidence, a.logger) {
++			continue
++		}
++
++		// Create macro if LLM says merge
++		if output.ShouldMerge {
++			macro := createMacroFromLLM(window, output, a.timeManager.Now())
++			if err := createMacroEpisode(ctx, a.pgClient, macro, a.logger); err != nil {
++				a.logger.Error("Failed to create LLM macro", "error", err)
++				continue
++			}
++			macros = append(macros, macro)
++		}
++	}
++
++	return macros, nil
++}
++
++func (a *Agent) handleConsolidationTrigger(msg mqtt.Message) {
++	var trigger struct {
++		Action        string `json:"action"`
++		LookbackHours int    `json:"lookback_hours"`
++		Location      string `json:"location"`
++	}
++
++	if err := json.Unmarshal(msg.Payload(), &trigger); err != nil {
++		a.logger.Error("Failed to parse trigger", "error", err)
++		return
++	}
++
++	if trigger.Action != "consolidate" {
++		return
++	}
++
++	lookbackHours := trigger.LookbackHours
++	if lookbackHours == 0 {
++		lookbackHours = a.cfg.ConsolidationLookbackHours
++	}
++
++	now := a.timeManager.Now()
++	sinceTime := now.Add(-time.Duration(lookbackHours) * time.Hour)
++
++	a.logger.Info("Manual consolidation triggered",
++		"lookback_hours", lookbackHours,
++		"location", trigger.Location)
++
++	ctx := context.Background()
++	if err := a.performConsolidation(ctx, sinceTime, trigger.Location); err != nil {
++		a.logger.Error("Consolidation failed", "error", err)
++	}
++}
++
++func (a *Agent) runConsolidationJob(ctx context.Context) {
++	interval := time.Duration(a.cfg.ConsolidationIntervalHours) * time.Hour
++
++	a.logger.Info("Starting consolidation job", "interval", interval)
++
++	ticker := time.NewTicker(interval)
++	defer ticker.Stop()
++
++	for {
++		select {
++		case <-ticker.C:
++			now := a.timeManager.Now()
++			sinceTime := now.Add(-time.Duration(a.cfg.ConsolidationLookbackHours) * time.Hour)
++
++			a.logger.Info("Running periodic consolidation")
++
++			if err := a.performConsolidation(ctx, sinceTime, ""); err != nil {
++				a.logger.Error("Periodic consolidation failed", "error", err)
++			}
++
++		case <-ctx.Done():
++			a.logger.Info("Consolidation job stopping")
++			return
++		}
++	}
++}
++
+ func (a *Agent) handleLightingMessage(msg mqtt.Message) {
+-	// TODO: Track manual adjustments
++	// TODO
+ }
+ 
+ func (a *Agent) handleMediaMessage(msg mqtt.Message) {
+-	// TODO: Detect media activity for inference
++	// TODO
+ }
+diff --git a/internal/behavior/consolidation.go b/internal/behavior/consolidation.go
+index cff8814..b3fffff 100644
+--- a/internal/behavior/consolidation.go
++++ b/internal/behavior/consolidation.go
+@@ -4,46 +4,85 @@ import (
+ 	"context"
+ 	"encoding/json"
+ 	"fmt"
++	"log/slog"
+ 	"sort"
+ 	"time"
+ 
+ 	"github.com/google/uuid"
+-	"github.com/saaga0h/jeeves-platform/pkg/mqtt"
++	"github.com/saaga0h/jeeves-platform/pkg/postgres"
+ )
+ 
+-// shouldMergeEpisodes determines if two episodes can be merged
+-func shouldMergeEpisodes(ep1, ep2 *MicroEpisode, maxGapMinutes int) bool {
+-	// Must be same location
++// ===================================================================
++// Pure helper functions - NO references to Agent
++// ===================================================================
++
++func sortEpisodesByStartTime(episodes []*MicroEpisode) {
++	sort.Slice(episodes, func(i, j int) bool {
++		return episodes[i].StartTime.Before(episodes[j].StartTime)
++	})
++}
++
++func groupByLocation(episodes []*MicroEpisode) map[string][]*MicroEpisode {
++	result := make(map[string][]*MicroEpisode)
++	for _, ep := range episodes {
++		result[ep.Location] = append(result[ep.Location], ep)
++	}
++	return result
++}
++
++func groupByTimeWindow(episodes []*MicroEpisode, windowSize time.Duration) [][]*MicroEpisode {
++	if len(episodes) == 0 {
++		return nil
++	}
++
++	var windows [][]*MicroEpisode
++	currentWindow := []*MicroEpisode{episodes[0]}
++	windowStart := episodes[0].StartTime
++
++	for i := 1; i < len(episodes); i++ {
++		ep := episodes[i]
++
++		if ep.StartTime.Sub(windowStart) < windowSize {
++			currentWindow = append(currentWindow, ep)
++		} else {
++			if len(currentWindow) > 0 {
++				windows = append(windows, currentWindow)
++			}
++			currentWindow = []*MicroEpisode{ep}
++			windowStart = ep.StartTime
++		}
++	}
++
++	if len(currentWindow) > 0 {
++		windows = append(windows, currentWindow)
++	}
++
++	return windows
++}
++
++func canMergeSimple(ep1, ep2 *MicroEpisode, maxGapMinutes int) bool {
+ 	if ep1.Location != ep2.Location {
+ 		return false
+ 	}
+ 
+-	// First episode must be closed
+-	if ep1.EndedAt == nil {
++	if ep1.EndTime == nil {
+ 		return false
+ 	}
+ 
+-	// CRITICAL: Don't merge episodes longer than 6 hours - likely spurious
+-	ep1Duration := ep1.EndedAt.Sub(ep1.StartedAt).Hours()
+-	ep2Duration := ep2.EndedAt.Sub(ep2.StartedAt).Hours()
++	// Don't merge long episodes (> 6 hours)
++	ep1Duration := ep1.EndTime.Sub(ep1.StartTime).Hours()
++	ep2Duration := ep2.EndTime.Sub(ep2.StartTime).Hours()
+ 
+ 	if ep1Duration > 6 || ep2Duration > 6 {
+-		return false // Skip abnormally long episodes
+-	}
+-
+-	// Calculate gap between episodes
+-	gapMinutes := ep2.StartedAt.Sub(*ep1.EndedAt).Minutes()
+-
+-	if gapMinutes > float64(maxGapMinutes) {
+ 		return false
+ 	}
+ 
+-	// Don't merge if gap is negative (overlapping) or too small (< 1 min)
+-	if gapMinutes < 1 {
++	gapMinutes := ep2.StartTime.Sub(*ep1.EndTime).Minutes()
++
++	if gapMinutes > float64(maxGapMinutes) || gapMinutes < 1 {
+ 		return false
+ 	}
+ 
+-	// Same trigger type (for now - can be more sophisticated later)
+ 	if ep1.TriggerType != ep2.TriggerType {
+ 		return false
+ 	}
+@@ -51,67 +90,74 @@ func shouldMergeEpisodes(ep1, ep2 *MicroEpisode, maxGapMinutes int) bool {
+ 	return true
+ }
+ 
+-// mergeMicroEpisodes creates a macro-episode from multiple micro-episodes
+-func mergeMicroEpisodes(episodes []*MicroEpisode) *MacroEpisode {
+-	if len(episodes) == 0 {
+-		return nil
++func hasMultipleLocations(episodes []*MicroEpisode) bool {
++	if len(episodes) < 2 {
++		return false
+ 	}
+ 
+-	startTime := episodes[0].StartedAt
+-	endTime := episodes[len(episodes)-1].EndedAt
+-	if endTime == nil {
+-		endTime = &time.Time{}
+-		*endTime = time.Now()
++	firstLocation := episodes[0].Location
++	for _, ep := range episodes[1:] {
++		if ep.Location != firstLocation {
++			return true
++		}
+ 	}
++	return false
++}
+ 
+-	durationMinutes := int(endTime.Sub(startTime).Minutes())
+-
+-	// Collect unique locations
+-	locationMap := make(map[string]bool)
+-	for _, ep := range episodes {
+-		locationMap[ep.Location] = true
++func hasComplexTemporalPatterns(episodes []*MicroEpisode) bool {
++	if len(episodes) < 3 {
++		return false
+ 	}
+-	locations := make([]string, 0, len(locationMap))
+-	for loc := range locationMap {
+-		locations = append(locations, loc)
++
++	for i := 0; i < len(episodes)-1; i++ {
++		if episodes[i].EndTime == nil {
++			continue
++		}
++
++		gap := episodes[i+1].StartTime.Sub(*episodes[i].EndTime)
++		if gap > time.Hour {
++			return true
++		}
+ 	}
+ 
+-	// Pattern type (simplified - use first episode's trigger)
+-	patternType := episodes[0].TriggerType
++	return false
++}
++
++func createMacroFromGroup(episodes []*MicroEpisode, patternType string, now time.Time) *MacroEpisode {
++	location := episodes[0].Location
+ 
+-	// Collect micro-episode IDs
+ 	microIDs := make([]uuid.UUID, len(episodes))
+ 	for i, ep := range episodes {
+ 		microIDs[i] = ep.ID
+ 	}
+ 
+-	// Count manual actions (from JSONB field)
+-	manualActionCount := 0
++	startTime := episodes[0].StartTime
++	endTime := episodes[len(episodes)-1].EndTime
++	if endTime == nil {
++		endTime = &now
++	}
++
++	duration := int(endTime.Sub(startTime).Minutes())
++
++	manualCount := 0
+ 	for _, ep := range episodes {
+-		manualActionCount += len(ep.ManualActions)
++		manualCount += len(ep.ManualActions)
+ 	}
+ 
+-	// Generate summary
+ 	summary := fmt.Sprintf("%s session at %s for %d minutes with %d manual adjustments",
+-		patternType, locations[0], durationMinutes, manualActionCount)
++		patternType, location, duration, manualCount)
+ 
+-	// Semantic tags
+-	tags := []string{patternType}
+-	tags = append(tags, locations...)
+-	if durationMinutes > 60 {
++	tags := []string{patternType, location}
++	if duration > 60 {
+ 		tags = append(tags, "extended_session")
+ 	} else {
+ 		tags = append(tags, "short_session")
+ 	}
+-	if manualActionCount > 0 {
+-		tags = append(tags, "with_manual_adjustments")
+-	} else {
+-		tags = append(tags, "automated")
+-	}
+ 
+ 	contextFeatures := map[string]interface{}{
+-		"manual_action_count": manualActionCount,
+-		"location_count":      len(locations),
++		"consolidation_type":  "rule_based",
++		"manual_action_count": manualCount,
++		"location_count":      1,
+ 		"micro_episode_count": len(episodes),
+ 	}
+ 
+@@ -120,180 +166,138 @@ func mergeMicroEpisodes(episodes []*MicroEpisode) *MacroEpisode {
+ 		PatternType:     patternType,
+ 		StartTime:       startTime,
+ 		EndTime:         *endTime,
+-		DurationMinutes: durationMinutes,
+-		Locations:       locations,
++		DurationMinutes: duration,
++		Locations:       []string{location},
+ 		MicroEpisodeIDs: microIDs,
+ 		Summary:         summary,
+ 		SemanticTags:    tags,
+ 		ContextFeatures: contextFeatures,
+-		CreatedAt:       time.Now(),
++		CreatedAt:       now,
+ 	}
+ }
+ 
+-// consolidateMicroEpisodes performs the consolidation process
+-func (a *Agent) consolidateMicroEpisodes(ctx context.Context, sinceTime time.Time, location string) error {
+-	a.logger.Info("Starting consolidation",
+-		"since", sinceTime,
+-		"location", location)
+-
+-	// Get unconsolidated episodes
+-	episodes, err := a.getUnconsolidatedEpisodes(ctx, sinceTime, location)
+-	if err != nil {
+-		return fmt.Errorf("failed to get unconsolidated episodes: %w", err)
++// ===================================================================
++// Database operations - pure functions, take pgClient as parameter
++// ===================================================================
++
++func getUnconsolidatedEpisodes(
++	ctx context.Context,
++	pgClient postgres.Client,
++	sinceTime time.Time,
++	location string,
++	logger *slog.Logger,
++) ([]*MicroEpisode, error) {
++	query := `
++		SELECT 
++			id, trigger_type, start_time, end_time, end_reason,
++			location, context_snapshot, manual_actions, metadata
++		FROM micro_episodes
++		WHERE start_time >= $1
++		  AND end_time IS NOT NULL
++		  AND id NOT IN (
++		      SELECT UNNEST(micro_episode_ids) FROM macro_episodes
++		  )
++	`
++
++	args := []interface{}{sinceTime}
++
++	if location != "" {
++		query += " AND location = $2"
++		args = append(args, location)
+ 	}
+ 
+-	a.logger.Info("Found unconsolidated episodes", "count", len(episodes))
++	query += " ORDER BY location, start_time ASC"
+ 
+-	if len(episodes) == 0 {
+-		a.logger.Info("No episodes to consolidate")
+-		return nil
+-	}
+-
+-	// Group by location
+-	byLocation := make(map[string][]*MicroEpisode)
+-	for _, ep := range episodes {
+-		byLocation[ep.Location] = append(byLocation[ep.Location], ep)
++	rows, err := pgClient.Query(ctx, query, args...)
++	if err != nil {
++		return nil, err
+ 	}
+-
+-	macroEpisodesCreated := 0
+-	maxGapMinutes := a.cfg.ConsolidationMaxGapMinutes
+-
+-	// Process each location
+-	for loc, locationEpisodes := range byLocation {
+-		a.logger.Debug("Processing location", "location", loc, "episodes", len(locationEpisodes))
+-
+-		// Sort by start time
+-		sortEpisodesByStartTime(locationEpisodes)
+-
+-		currentGroup := []*MicroEpisode{locationEpisodes[0]}
+-
+-		for i := 1; i < len(locationEpisodes); i++ {
+-			prevEpisode := locationEpisodes[i-1]
+-			currentEpisode := locationEpisodes[i]
+-
+-			if shouldMergeEpisodes(prevEpisode, currentEpisode, maxGapMinutes) {
+-				currentGroup = append(currentGroup, currentEpisode)
+-			} else {
+-				// Save current group if it has multiple episodes
+-				if len(currentGroup) > 1 {
+-					macroEpisode := mergeMicroEpisodes(currentGroup)
+-					if err := a.createMacroEpisode(ctx, macroEpisode); err != nil {
+-						a.logger.Error("Failed to create macro-episode", "error", err)
+-					} else {
+-						macroEpisodesCreated++
+-					}
+-				}
+-
+-				// Start new group
+-				currentGroup = []*MicroEpisode{currentEpisode}
+-			}
++	defer rows.Close()
++
++	var episodes []*MicroEpisode
++	for rows.Next() {
++		var ep MicroEpisode
++		var contextJSON []byte
++		var manualActionsJSON []byte
++		var metadataJSON []byte
++
++		err := rows.Scan(
++			&ep.ID,
++			&ep.TriggerType,
++			&ep.StartTime,
++			&ep.EndTime,
++			&ep.EndReason,
++			&ep.Location,
++			&contextJSON,
++			&manualActionsJSON,
++			&metadataJSON,
++		)
++		if err != nil {
++			return nil, err
+ 		}
+ 
+-		// Handle last group
+-		if len(currentGroup) > 1 {
+-			macroEpisode := mergeMicroEpisodes(currentGroup)
+-			if err := a.createMacroEpisode(ctx, macroEpisode); err != nil {
+-				a.logger.Error("Failed to create macro-episode", "error", err)
+-			} else {
+-				macroEpisodesCreated++
+-			}
++		if len(contextJSON) > 0 {
++			json.Unmarshal(contextJSON, &ep.ContextSnapshot)
+ 		}
+-	}
+-
+-	a.logger.Info("Consolidation completed",
+-		"micro_episodes_processed", len(episodes),
+-		"macro_episodes_created", macroEpisodesCreated)
+ 
+-	// Publish consolidation result
+-	a.publishConsolidationResult(macroEpisodesCreated, len(episodes))
+-
+-	return nil
+-}
+-
+-// Helper: sort episodes by start time
+-func sortEpisodesByStartTime(episodes []*MicroEpisode) {
+-	sort.Slice(episodes, func(i, j int) bool {
+-		return episodes[i].StartedAt.Before(episodes[j].StartedAt)
+-	})
+-}
++		if len(manualActionsJSON) > 0 {
++			json.Unmarshal(manualActionsJSON, &ep.ManualActions)
++		}
+ 
+-// publishConsolidationResult publishes consolidation metrics
+-func (a *Agent) publishConsolidationResult(macroCreated, microProcessed int) {
+-	topic := "automation/behavior/consolidation/completed"
++		if len(metadataJSON) > 0 {
++			json.Unmarshal(metadataJSON, &ep.Metadata)
++		}
+ 
+-	payload := map[string]interface{}{
+-		"timestamp":                a.timeManager.Now().Format(time.RFC3339),
+-		"macro_episodes_created":   macroCreated,
+-		"micro_episodes_processed": microProcessed,
++		episodes = append(episodes, &ep)
+ 	}
+ 
+-	payloadBytes, _ := json.Marshal(payload)
+-	a.mqtt.Publish(topic, 0, false, payloadBytes)
++	return episodes, rows.Err()
+ }
+ 
+-// handleConsolidationTrigger handles manual consolidation requests
+-func (a *Agent) handleConsolidationTrigger(msg mqtt.Message) {
+-	var trigger struct {
+-		Action        string `json:"action"`
+-		LookbackHours int    `json:"lookback_hours"`
+-		Location      string `json:"location"`
+-	}
+-
+-	if err := json.Unmarshal(msg.Payload(), &trigger); err != nil {
+-		a.logger.Error("Failed to parse consolidation trigger", "error", err)
+-		return
+-	}
+-
+-	if trigger.Action != "consolidate" {
+-		a.logger.Warn("Unknown consolidation action", "action", trigger.Action)
+-		return
++func createMacroEpisode(
++	ctx context.Context,
++	pgClient postgres.Client,
++	macro *MacroEpisode,
++	logger *slog.Logger,
++) error {
++	query := `
++		INSERT INTO macro_episodes (
++			id, pattern_type, start_time, end_time, duration_minutes,
++			locations, micro_episode_ids, summary, semantic_tags,
++			context_features, embedding, created_at
++		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
++	`
++
++	contextJSON, err := json.Marshal(macro.ContextFeatures)
++	if err != nil {
++		return fmt.Errorf("failed to marshal context: %w", err)
+ 	}
+ 
+-	lookbackHours := trigger.LookbackHours
+-	if lookbackHours == 0 {
+-		lookbackHours = a.cfg.ConsolidationLookbackHours
++	microIDStrings := make([]string, len(macro.MicroEpisodeIDs))
++	for i, id := range macro.MicroEpisodeIDs {
++		microIDStrings[i] = id.String()
+ 	}
+ 
+-	now := a.timeManager.Now()
+-	sinceTime := now.Add(-time.Duration(lookbackHours) * time.Hour)
+-
+-	a.logger.Info("Manual consolidation triggered",
+-		"lookback_hours", lookbackHours,
+-		"location", trigger.Location,
+-		"virtual_time", now)
++	_, err = pgClient.Exec(ctx, query,
++		macro.ID,
++		macro.PatternType,
++		macro.StartTime,
++		macro.EndTime,
++		macro.DurationMinutes,
++		macro.Locations,
++		microIDStrings,
++		macro.Summary,
++		macro.SemanticTags,
++		contextJSON,
++		macro.Embedding,
++		macro.CreatedAt,
++	)
+ 
+-	ctx := context.Background()
+-	if err := a.consolidateMicroEpisodes(ctx, sinceTime, trigger.Location); err != nil {
+-		a.logger.Error("Manual consolidation failed", "error", err)
++	if err != nil {
++		return fmt.Errorf("failed to insert macro: %w", err)
+ 	}
+-}
+-
+-// runConsolidationJob runs periodic consolidation in the background
+-func (a *Agent) runConsolidationJob(ctx context.Context) {
+-	interval := time.Duration(a.cfg.ConsolidationIntervalHours) * time.Hour
+-
+-	a.logger.Info("Starting consolidation job",
+-		"interval", interval,
+-		"lookback", a.cfg.ConsolidationLookbackHours)
+-
+-	ticker := time.NewTicker(interval)
+-	defer ticker.Stop()
+-
+-	for {
+-		select {
+-		case <-ticker.C:
+-			now := a.timeManager.Now() // Virtual time aware!
+-			sinceTime := now.Add(-time.Duration(a.cfg.ConsolidationLookbackHours) * time.Hour)
+ 
+-			a.logger.Info("Running periodic consolidation", "virtual_time", now)
++	logger.Info("Macro created", "id", macro.ID, "pattern", macro.PatternType)
+ 
+-			if err := a.consolidateMicroEpisodes(ctx, sinceTime, ""); err != nil {
+-				a.logger.Error("Periodic consolidation failed", "error", err)
+-			}
+-
+-		case <-ctx.Done():
+-			a.logger.Info("Consolidation job stopping")
+-			return
+-		}
+-	}
++	return nil
+ }
+diff --git a/pkg/config/config.go b/pkg/config/config.go
+index d86ddd0..a201a25 100644
+--- a/pkg/config/config.go
++++ b/pkg/config/config.go
+@@ -65,6 +65,7 @@ type Config struct {
+ 	OccupancyAnalysisIntervalSec int
+ 	LLMEndpoint                  string
+ 	LLMModel                     string
++	LLMMinConfidence             float64
+ 	MaxEventHistory              int
+ 
+ 	// Consolidation settings
+@@ -115,7 +116,8 @@ func NewConfig() *Config {
+ 		// Occupancy agent defaults
+ 		OccupancyAnalysisIntervalSec: 30,
+ 		LLMEndpoint:                  "http://localhost:11434/api/generate",
+-		LLMModel:                     "llama3.2:3b",
++		LLMModel:                     "mixtral:8:7b",
++		LLMMinConfidence:             0.7,
+ 		MaxEventHistory:              100,
+ 		// Consolidation defaults
+ 		ConsolidationIntervalHours: 24,
+@@ -289,6 +291,11 @@ func (c *Config) LoadFromEnv() {
+ 	if v := os.Getenv("JEEVES_LLM_MODEL"); v != "" {
+ 		c.LLMModel = v
+ 	}
++	if v := os.Getenv("JEEVES_LLM_MIN_CONFIDENCE"); v != "" {
++		if conf, err := strconv.ParseFloat(v, 64); err == nil {
++			c.LLMMinConfidence = conf
++		}
++	}
+ 	if v := os.Getenv("JEEVES_MAX_EVENT_HISTORY"); v != "" {
+ 		if max, err := strconv.Atoi(v); err == nil {
+ 			c.MaxEventHistory = max
+@@ -366,6 +373,7 @@ func (c *Config) LoadFromFlags() {
+ 	pflag.IntVar(&c.OccupancyAnalysisIntervalSec, "occupancy-analysis-interval", c.OccupancyAnalysisIntervalSec, "Occupancy analysis interval in seconds")
+ 	pflag.StringVar(&c.LLMEndpoint, "llm-endpoint", c.LLMEndpoint, "LLM API endpoint URL")
+ 	pflag.StringVar(&c.LLMModel, "llm-model", c.LLMModel, "LLM model name")
++	pflag.Float64Var(&c.LLMMinConfidence, "llm-min-confidence", c.LLMMinConfidence, "Minimum LLM confidence threshold")
+ 	pflag.IntVar(&c.MaxEventHistory, "max-event-history", c.MaxEventHistory, "Maximum motion event history to keep")
+ 
+ 	// Consolidation flags

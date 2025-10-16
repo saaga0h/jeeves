@@ -1,0 +1,70 @@
+name: "Lunch Break - Episode Closure Test"
+description: "Minimal test for episode closure after occupancy stabilization"
+
+test_mode:
+  virtual_start: "2025-10-17T12:00:00Z"
+  time_scale: 60
+
+setup:
+  location: "universe"
+  initial_state:
+    occupancy: null
+
+events:
+  # Enter kitchen (12:00)
+  - time: 0
+    sensor: "motion:kitchen"
+    value: true
+    description: "Person enters kitchen"
+  - time: 2
+    type: occupancy
+    location: kitchen
+    description: "Occupancy detected"
+    data:
+      state: "occupied"
+      confidence: 0.85
+
+  # Leave kitchen (12:05) - explicit empty
+  - time: 300  # 5 minutes
+    type: occupancy
+    location: kitchen
+    description: "Person leaves kitchen"
+    data:
+      state: "empty"
+      confidence: 0.9
+
+  # Wait 30 minutes - NO motion, NO occupancy changes
+  # Kitchen should stay empty
+  
+  # Check episode at 12:40 (should be closed by now)
+  - time: 2400  # 40 minutes from start
+    type: behavior
+    location: universe
+    description: "Force consolidation check"
+    data:
+      action: "consolidate"
+      lookback_hours: 1
+
+wait:
+  - time: 2500
+    description: "Wait a bit after consolidation"
+    
+expectations:
+  postgres:
+    - time: 2500
+      postgres_query: |
+        SELECT COUNT(*) 
+        FROM behavioral_episodes 
+        WHERE location = 'kitchen'
+          AND ended_at_text IS NOT NULL
+      postgres_expected: "1"
+      description: "Kitchen episode should be closed"
+      
+    - time: 2500
+      postgres_query: |
+        SELECT EXTRACT(EPOCH FROM (ended_at_text::timestamptz - started_at_text::timestamptz))/60 
+        FROM behavioral_episodes 
+        WHERE location = 'kitchen'
+        LIMIT 1
+      postgres_expected: "~5"
+      description: "Kitchen episode should last ~5 minutes, not hours"

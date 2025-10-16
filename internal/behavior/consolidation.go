@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -130,24 +131,18 @@ func mergeMicroEpisodes(episodes []*MicroEpisode) *MacroEpisode {
 	}
 }
 
-// consolidateMicroEpisodes performs the consolidation process
-func (a *Agent) consolidateMicroEpisodes(ctx context.Context, sinceTime time.Time, location string) error {
-	a.logger.Info("Starting consolidation",
-		"since", sinceTime,
-		"location", location)
-
-	// Get unconsolidated episodes
-	episodes, err := a.getUnconsolidatedEpisodes(ctx, sinceTime, location)
-	if err != nil {
-		return fmt.Errorf("failed to get unconsolidated episodes: %w", err)
-	}
-
-	a.logger.Info("Found unconsolidated episodes", "count", len(episodes))
-
+// consolidateMicroEpisodesRuleBased is a PURE FUNCTION that creates macro-episodes
+// from micro-episodes using simple rule-based logic (same location, small gaps)
+func consolidateMicroEpisodesRuleBased(episodes []*MicroEpisode, maxGapMinutes int, logger *slog.Logger) []*MacroEpisode {
 	if len(episodes) == 0 {
-		a.logger.Info("No episodes to consolidate")
 		return nil
 	}
+
+	logger.Debug("Rule-based consolidation starting",
+		"episodes", len(episodes),
+		"max_gap_minutes", maxGapMinutes)
+
+	var macros []*MacroEpisode
 
 	// Group by location
 	byLocation := make(map[string][]*MicroEpisode)
@@ -155,33 +150,57 @@ func (a *Agent) consolidateMicroEpisodes(ctx context.Context, sinceTime time.Tim
 		byLocation[ep.Location] = append(byLocation[ep.Location], ep)
 	}
 
-	macroEpisodesCreated := 0
-	maxGapMinutes := a.cfg.ConsolidationMaxGapMinutes
+	logger.Debug("Episodes grouped by location",
+		"locations", len(byLocation))
 
 	// Process each location
-	for loc, locationEpisodes := range byLocation {
-		a.logger.Debug("Processing location", "location", loc, "episodes", len(locationEpisodes))
+	for location, locationEpisodes := range byLocation {
+		logger.Debug("Processing location",
+			"location", location,
+			"episodes", len(locationEpisodes))
+
+		if len(locationEpisodes) < 2 {
+			logger.Debug("Skipping location - insufficient episodes",
+				"location", location)
+			continue
+		}
 
 		// Sort by start time
 		sortEpisodesByStartTime(locationEpisodes)
 
 		currentGroup := []*MicroEpisode{locationEpisodes[0]}
+		groupsProcessed := 0
 
 		for i := 1; i < len(locationEpisodes); i++ {
-			prevEpisode := locationEpisodes[i-1]
+			prevEpisode := currentGroup[len(currentGroup)-1]
 			currentEpisode := locationEpisodes[i]
 
-			if shouldMergeEpisodes(prevEpisode, currentEpisode, maxGapMinutes) {
+			canMerge := shouldMergeEpisodes(prevEpisode, currentEpisode, maxGapMinutes)
+
+			if canMerge {
+				gap := currentEpisode.StartedAt.Sub(*prevEpisode.EndedAt).Minutes()
+				logger.Debug("Merging episodes",
+					"location", location,
+					"prev_id", prevEpisode.ID,
+					"current_id", currentEpisode.ID,
+					"gap_minutes", fmt.Sprintf("%.1f", gap))
 				currentGroup = append(currentGroup, currentEpisode)
 			} else {
 				// Save current group if it has multiple episodes
 				if len(currentGroup) > 1 {
-					macroEpisode := mergeMicroEpisodes(currentGroup)
-					if err := a.createMacroEpisode(ctx, macroEpisode); err != nil {
-						a.logger.Error("Failed to create macro-episode", "error", err)
-					} else {
-						macroEpisodesCreated++
+					macro := mergeMicroEpisodes(currentGroup)
+					if macro != nil {
+						logger.Debug("Created macro from group",
+							"location", location,
+							"micro_count", len(currentGroup),
+							"duration_min", macro.DurationMinutes)
+						macros = append(macros, macro)
+						groupsProcessed++
 					}
+				} else {
+					logger.Debug("Group too small, not consolidating",
+						"location", location,
+						"episode_id", currentGroup[0].ID)
 				}
 
 				// Start new group
@@ -191,23 +210,26 @@ func (a *Agent) consolidateMicroEpisodes(ctx context.Context, sinceTime time.Tim
 
 		// Handle last group
 		if len(currentGroup) > 1 {
-			macroEpisode := mergeMicroEpisodes(currentGroup)
-			if err := a.createMacroEpisode(ctx, macroEpisode); err != nil {
-				a.logger.Error("Failed to create macro-episode", "error", err)
-			} else {
-				macroEpisodesCreated++
+			macro := mergeMicroEpisodes(currentGroup)
+			if macro != nil {
+				logger.Debug("Created macro from final group",
+					"location", location,
+					"micro_count", len(currentGroup),
+					"duration_min", macro.DurationMinutes)
+				macros = append(macros, macro)
+				groupsProcessed++
 			}
 		}
+
+		logger.Debug("Location processing complete",
+			"location", location,
+			"groups_processed", groupsProcessed)
 	}
 
-	a.logger.Info("Consolidation completed",
-		"micro_episodes_processed", len(episodes),
-		"macro_episodes_created", macroEpisodesCreated)
+	logger.Debug("Rule-based consolidation complete",
+		"macros_created", len(macros))
 
-	// Publish consolidation result
-	a.publishConsolidationResult(macroEpisodesCreated, len(episodes))
-
-	return nil
+	return macros
 }
 
 // Helper: sort episodes by start time
@@ -263,7 +285,7 @@ func (a *Agent) handleConsolidationTrigger(msg mqtt.Message) {
 		"virtual_time", now)
 
 	ctx := context.Background()
-	if err := a.consolidateMicroEpisodes(ctx, sinceTime, trigger.Location); err != nil {
+	if err := a.performConsolidation(ctx, sinceTime, trigger.Location); err != nil {
 		a.logger.Error("Manual consolidation failed", "error", err)
 	}
 }
@@ -282,12 +304,12 @@ func (a *Agent) runConsolidationJob(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			now := a.timeManager.Now() // Virtual time aware!
+			now := a.timeManager.Now()
 			sinceTime := now.Add(-time.Duration(a.cfg.ConsolidationLookbackHours) * time.Hour)
 
 			a.logger.Info("Running periodic consolidation", "virtual_time", now)
 
-			if err := a.consolidateMicroEpisodes(ctx, sinceTime, ""); err != nil {
+			if err := a.performConsolidation(ctx, sinceTime, ""); err != nil {
 				a.logger.Error("Periodic consolidation failed", "error", err)
 			}
 

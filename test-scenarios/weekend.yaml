@@ -3,7 +3,7 @@ description: "Two-day scenario testing multi-location, multi-day consolidation w
 
 test_mode:
   virtual_start: "2025-10-17T08:00:00Z"  # Friday 8 AM
-  time_scale: 360  # 40.5 hours virtual = 6.75 minutes real
+  time_scale: 60  # 40.5 hours virtual = 6.75 minutes real
 
 setup:
   location: "universe"

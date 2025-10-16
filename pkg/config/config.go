@@ -65,6 +65,7 @@ type Config struct {
 	OccupancyAnalysisIntervalSec int
 	LLMEndpoint                  string
 	LLMModel                     string
+	LLMMinConfidence             float64
 	MaxEventHistory              int
 
 	// Consolidation settings
@@ -115,7 +116,8 @@ func NewConfig() *Config {
 		// Occupancy agent defaults
 		OccupancyAnalysisIntervalSec: 30,
 		LLMEndpoint:                  "http://localhost:11434/api/generate",
-		LLMModel:                     "llama3.2:3b",
+		LLMModel:                     "mixtral:8:7b",
+		LLMMinConfidence:             0.7,
 		MaxEventHistory:              100,
 		// Consolidation defaults
 		ConsolidationIntervalHours: 24,
@@ -289,6 +291,11 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("JEEVES_LLM_MODEL"); v != "" {
 		c.LLMModel = v
 	}
+	if v := os.Getenv("JEEVES_LLM_MIN_CONFIDENCE"); v != "" {
+		if conf, err := strconv.ParseFloat(v, 64); err == nil {
+			c.LLMMinConfidence = conf
+		}
+	}
 	if v := os.Getenv("JEEVES_MAX_EVENT_HISTORY"); v != "" {
 		if max, err := strconv.Atoi(v); err == nil {
 			c.MaxEventHistory = max
@@ -366,6 +373,7 @@ func (c *Config) LoadFromFlags() {
 	pflag.IntVar(&c.OccupancyAnalysisIntervalSec, "occupancy-analysis-interval", c.OccupancyAnalysisIntervalSec, "Occupancy analysis interval in seconds")
 	pflag.StringVar(&c.LLMEndpoint, "llm-endpoint", c.LLMEndpoint, "LLM API endpoint URL")
 	pflag.StringVar(&c.LLMModel, "llm-model", c.LLMModel, "LLM model name")
+	pflag.Float64Var(&c.LLMMinConfidence, "llm-min-confidence", c.LLMMinConfidence, "Minimum LLM confidence threshold")
 	pflag.IntVar(&c.MaxEventHistory, "max-event-history", c.MaxEventHistory, "Maximum motion event history to keep")
 
 	// Consolidation flags
