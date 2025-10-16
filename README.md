@@ -11,7 +11,7 @@ J.E.E.V.E.S. Platform 2.0 is a complete rewrite of the Node.js-based home automa
 - **Collector Agent**: Receives raw sensor data, stores in Redis, publishes triggers
 - **Illuminance Agent**: Monitors light levels and adjusts lighting automatically
 - **Light Agent**: Bridges MQTT commands with physical lights
-- **Occupancy Agent**: Detects and tracks room occupancy patterns
+- **Occupancy Agent**: Uses advanced pattern recognition and AI to detect room occupancy from motion sensors
 
 ## Architecture Principles
 
@@ -146,40 +146,53 @@ The Collector Agent is the **central data hub** that receives all sensor data an
 
 See [docs/collector/](docs/collector/) for complete documentation.
 
-### Illuminance Agent (🚧 Stub)
+### Illuminance Agent
 
-Monitors light levels and automatically adjusts lighting.
+Analyzes room lighting conditions and provides intelligent context for other automation agents.
 
-**TODO:**
-- Subscribe to illuminance sensor topics
-- Implement light level monitoring
-- Implement automated light adjustment based on thresholds
+**Key Features:**
+- **Lighting Analysis**: Categorizes lighting (dark/dim/moderate/bright/very_bright) with trend analysis
+- **Context Publishing**: Publishes rich lighting context via MQTT for other agents to use
+- **Temporal Intelligence**: Tracks lighting patterns, stability, and typical levels over time
+- **Smart Fallbacks**: Uses astronomical calculations when sensor data is unavailable
+- **Integration Ready**: Powers smart lighting decisions for the Light Agent
 
-See [docs/illuminance/](docs/illuminance/) for specifications.
+See [docs/illuminance/](docs/illuminance/) for complete guides on how it works, message formats, MQTT integration, and Redis data requirements.
 
-### Light Agent (🚧 Stub)
+### Light Agent
 
-Bridges MQTT commands with Matter/physical lights.
+Intelligent lighting automation that responds to occupancy and environmental conditions.
 
-**TODO:**
-- Subscribe to light command topics
-- Implement Matter protocol integration
-- Handle light state commands (on, off, brightness, color)
-- Publish light state updates
+**Key Features:**
+- **Smart Decision Making**: Automatically turns lights on/off based on room occupancy and current lighting conditions
+- **Context-Aware Brightness**: Adjusts brightness based on time of day, natural light availability, and lighting history
+- **Circadian Color Temperature**: Uses warmer colors in evening (2400K-2700K) and cooler during day (4500K-5500K)
+- **Manual Override System**: Temporarily disables automation when manual control is detected
+- **Rate Limiting**: Prevents light flickering with intelligent decision timing
+- **Multi-Strategy Analysis**: Uses recent sensor data, historical patterns, or time-based fallbacks for reliable operation
 
-See [docs/light/](docs/light/) for specifications.
+See [docs/light/](docs/light/) for complete guides on how it works, decision logic, MQTT integration, manual override API, and troubleshooting.
 
-### Occupancy Agent (🚧 Stub)
+### Occupancy Agent
 
-Detects and tracks room occupancy patterns.
+Provides intelligent room occupancy detection using advanced temporal pattern analysis and machine learning. Converts unreliable motion sensor signals into confident occupancy predictions.
 
-**TODO:**
-- Subscribe to motion/occupancy sensor topics
-- Implement occupancy detection logic
-- Track behavioral patterns
-- Publish occupancy status updates
+**Key Features:**
+- **AI-Powered Analysis**: Uses local LLM (Ollama) to interpret complex motion patterns with human-readable reasoning
+- **Temporal Pattern Recognition**: Analyzes motion across multiple time scales to distinguish "person working" from "person left room"
+- **Anti-Oscillation Technology**: Vonich-Hakim stabilization prevents rapid state changes from boundary sensor conditions
+- **Pass-Through Detection**: Identifies when someone walked through vs. stayed in a room
+- **Confidence Scoring**: Provides reliability metrics for downstream automation decisions
+- **Settling Behavior Recognition**: Detects when someone enters and sits down (working, reading, watching TV)
 
-See [docs/occupancy/](docs/occupancy/) for specifications.
+**Smart Capabilities:**
+- Immediate response to room entries (< 1 second)
+- Distinguishes active presence from quiet presence
+- Handles sensor noise and environmental factors
+- Adapts to different room types and usage patterns
+- Falls back gracefully when AI components unavailable
+
+See [docs/occupancy/](docs/occupancy/) for complete guides on how the intelligent analysis works, pattern recognition algorithms, MQTT integration, and troubleshooting.
 
 ## Deployment
 
