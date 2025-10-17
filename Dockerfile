@@ -20,6 +20,7 @@ RUN go build -o illuminance-agent ./cmd/illuminance-agent
 RUN go build -o light-agent ./cmd/light-agent
 RUN go build -o occupancy-agent ./cmd/occupancy-agent
 RUN go build -o behavior-agent ./cmd/behavior-agent
+RUN go build -o observer-agent ./cmd/observer-agent
 
 # Collector agent
 FROM alpine:latest AS collector
@@ -54,3 +55,9 @@ RUN apk --no-cache add ca-certificates
 WORKDIR /app
 COPY --from=builder /build/behavior-agent .
 ENTRYPOINT ["./behavior-agent"]
+
+FROM alpine:latest AS observer-agent
+RUN apk --no-cache add ca-certificates
+WORKDIR /app
+COPY --from=builder /build/observer-agent .
+ENTRYPOINT ["./observer-agent"]

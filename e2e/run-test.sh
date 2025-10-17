@@ -28,7 +28,7 @@ docker-compose -f docker-compose.test.yml build
 
 # Start infrastructure and agents
 echo "Starting test environment..."
-docker-compose -f docker-compose.test.yml up -d mosquitto redis postgres collector illuminance-agent light-agent occupancy-agent behavior-agent
+docker-compose -f docker-compose.test.yml up -d mosquitto redis postgres collector illuminance-agent light-agent occupancy-agent behavior-agent observer-agent
 
 # Wait for services to be ready
 echo "Waiting for services to be ready..."
@@ -56,8 +56,8 @@ else
 fi
 
 # Cleanup
-echo ""
-echo "Cleaning up..."
-docker-compose -f docker-compose.test.yml down
+#echo ""
+#echo "Cleaning up..."
+#docker-compose -f docker-compose.test.yml down
 
 exit $EXIT_CODE

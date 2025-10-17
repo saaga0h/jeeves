@@ -38,7 +38,7 @@ logs: ## Show logs from all containers (usage: make logs SERVICE=occupancy-agent
 	fi
 
 start: ## Start test infrastructure (without running tests)
-	docker-compose -f docker-compose.test.yml up -d mosquitto redis collector illuminance-agent light-agent occupancy-agent behavior-agent
+	docker-compose -f docker-compose.test.yml up -d mosquitto redis collector illuminance-agent light-agent occupancy-agent behavior-agent observer-agent
 
 stop: ## Stop all test infrastructure
 	docker-compose -f docker-compose.test.yml down

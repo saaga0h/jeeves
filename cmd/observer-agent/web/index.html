@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>J.E.E.V.E.S. Observer - Behavioral Episodes</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0a0e27;
+            color: #e0e6ed;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            margin-bottom: 30px;
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #4a9eff;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #141b33;
+            border-radius: 8px;
+        }
+
+        .control-group {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        label {
+            font-size: 13px;
+            color: #8892a6;
+        }
+
+        input[type="text"] {
+            padding: 8px 12px;
+            background: #1e2740;
+            border: 1px solid #2a3650;
+            border-radius: 4px;
+            color: #e0e6ed;
+            font-size: 13px;
+            width: 120px;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #4a9eff;
+        }
+
+        button {
+            padding: 8px 16px;
+            background: #4a9eff;
+            border: none;
+            border-radius: 4px;
+            color: white;
+            font-size: 13px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+
+        button:hover {
+            background: #3a8eef;
+        }
+
+        .timeline-container {
+            background: #141b33;
+            border-radius: 8px;
+            padding: 20px;
+            overflow-x: auto;
+        }
+
+        svg {
+            display: block;
+        }
+
+        .macro-episode {
+            fill: #4a9eff;
+            fill-opacity: 0.3;
+            stroke: #4a9eff;
+            stroke-width: 2;
+            cursor: pointer;
+        }
+
+        .macro-episode:hover {
+            fill-opacity: 0.5;
+        }
+
+        .micro-episode {
+            fill: #ff6b9d;
+            fill-opacity: 0.6;
+            stroke: #ff6b9d;
+            stroke-width: 1;
+        }
+
+        .micro-episode:hover {
+            fill-opacity: 0.8;
+        }
+
+        .axis path,
+        .axis line {
+            stroke: #2a3650;
+        }
+
+        .axis text {
+            fill: #8892a6;
+            font-size: 11px;
+        }
+
+        .episode-label {
+            fill: #e0e6ed;
+            font-size: 12px;
+            pointer-events: none;
+        }
+
+        .tooltip {
+            position: absolute;
+            padding: 12px;
+            background: #1e2740;
+            border: 1px solid #2a3650;
+            border-radius: 6px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+            max-width: 300px;
+            font-size: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        .tooltip.visible {
+            opacity: 1;
+        }
+
+        .tooltip-title {
+            font-weight: 600;
+            color: #4a9eff;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+
+        .tooltip-row {
+            margin-bottom: 4px;
+        }
+
+        .tooltip-label {
+            color: #8892a6;
+            display: inline-block;
+            width: 80px;
+        }
+
+        .tooltip-value {
+            color: #e0e6ed;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #8892a6;
+        }
+
+        .error {
+            padding: 20px;
+            background: #4d1f1f;
+            border: 1px solid #7d2f2f;
+            border-radius: 6px;
+            color: #ffb3b3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>J.E.E.V.E.S. Observer</h1>
+            <p style="color: #8892a6; font-size: 13px;">Behavioral Episode Timeline Visualization</p>
+        </header>
+
+        <div class="controls">
+            <div class="control-group">
+                <label for="from">From:</label>
+                <input type="text" id="from" placeholder="ddmmyyyy" value="">
+            </div>
+            <div class="control-group">
+                <label for="to">To:</label>
+                <input type="text" id="to" placeholder="ddmmyyyy" value="">
+            </div>
+            <button onclick="loadData()">Load</button>
+            <button onclick="loadToday()">Today</button>
+        </div>
+
+        <div id="timeline" class="timeline-container">
+            <div class="loading">Loading...</div>
+        </div>
+    </div>
+
+    <div class="tooltip" id="tooltip"></div>
+
+    <script>
+        // Set today's date as default
+        const today = new Date();
+        const formatDate = (d) => {
+            const day = String(d.getDate()).padStart(2, '0');
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const year = d.getFullYear();
+            return `${day}${month}${year}`;
+        };
+
+        document.getElementById('from').value = formatDate(today);
+        document.getElementById('to').value = formatDate(today);
+
+        function loadToday() {
+            const todayStr = formatDate(new Date());
+            document.getElementById('from').value = todayStr;
+            document.getElementById('to').value = todayStr;
+            loadData();
+        }
+
+        async function loadData() {
+            const from = document.getElementById('from').value;
+            const to = document.getElementById('to').value;
+
+            if (!from || !to) {
+                alert('Please enter both from and to dates');
+                return;
+            }
+
+            const timelineDiv = document.getElementById('timeline');
+            timelineDiv.innerHTML = '<div class="loading">Loading...</div>';
+
+            try {
+                const response = await fetch(`/api/episodes?from=${from}&to=${to}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+                }
+                const data = await response.json();
+                renderTimeline(data);
+            } catch (error) {
+                timelineDiv.innerHTML = `<div class="error">Error loading data: ${error.message}</div>`;
+            }
+        }
+
+        function renderTimeline(episodes) {
+            const timelineDiv = document.getElementById('timeline');
+            timelineDiv.innerHTML = '';
+
+            if (!episodes || episodes.length === 0) {
+                timelineDiv.innerHTML = '<div class="loading">No episodes found for this date range</div>';
+                return;
+            }
+
+            // Dimensions
+            const margin = { top: 40, right: 40, bottom: 60, left: 100 };
+            const width = 1200 - margin.left - margin.right;
+            const height = Math.max(400, episodes.length * 60);
+
+            // Create SVG
+            const svg = d3.select('#timeline')
+                .append('svg')
+                .attr('width', width + margin.left + margin.right)
+                .attr('height', height + margin.top + margin.bottom)
+                .append('g')
+                .attr('transform', `translate(${margin.left},${margin.top})`);
+
+            // Parse dates
+            episodes.forEach(ep => {
+                ep.start = new Date(ep.start_time);
+                ep.end = new Date(ep.end_time);
+                if (ep.children) {
+                    ep.children.forEach(child => {
+                        child.start = new Date(child.start_time);
+                        child.end = new Date(child.end_time);
+                    });
+                }
+            });
+
+            // Time scale
+            const allDates = episodes.flatMap(ep => [ep.start, ep.end]);
+            const xScale = d3.scaleTime()
+                .domain([d3.min(allDates), d3.max(allDates)])
+                .range([0, width]);
+
+            // Y scale (one row per macro episode)
+            const yScale = d3.scaleBand()
+                .domain(episodes.map((_, i) => i))
+                .range([0, height])
+                .padding(0.2);
+
+            // X axis
+            const xAxis = d3.axisBottom(xScale)
+                .ticks(12)
+                .tickFormat(d3.timeFormat('%H:%M'));
+
+            svg.append('g')
+                .attr('class', 'axis')
+                .attr('transform', `translate(0,${height})`)
+                .call(xAxis);
+
+            // Tooltip
+            const tooltip = d3.select('#tooltip');
+
+            // Draw macro episodes
+            const macroGroups = svg.selectAll('.macro-group')
+                .data(episodes)
+                .enter()
+                .append('g')
+                .attr('class', 'macro-group')
+                .attr('transform', (d, i) => `translate(0,${yScale(i)})`);
+
+            // Macro episode rectangles
+            macroGroups.append('rect')
+                .attr('class', 'macro-episode')
+                .attr('x', d => xScale(d.start))
+                .attr('y', 0)
+                .attr('width', d => Math.max(2, xScale(d.end) - xScale(d.start)))
+                .attr('height', yScale.bandwidth())
+                .on('mouseover', function(event, d) {
+                    showTooltip(event, d, 'macro');
+                })
+                .on('mouseout', hideTooltip);
+
+            // Macro episode labels
+            macroGroups.append('text')
+                .attr('class', 'episode-label')
+                .attr('x', -5)
+                .attr('y', yScale.bandwidth() / 2)
+                .attr('text-anchor', 'end')
+                .attr('dominant-baseline', 'middle')
+                .text(d => d.pattern_type || 'unknown')
+                .style('font-size', '11px');
+
+            // Draw micro episodes inside macro
+            macroGroups.each(function(macro, macroIdx) {
+                if (!macro.children || macro.children.length === 0) return;
+
+                const g = d3.select(this);
+                const microHeight = yScale.bandwidth() / 3;
+                const microY = yScale.bandwidth() / 2 - microHeight / 2;
+
+                g.selectAll('.micro-episode')
+                    .data(macro.children)
+                    .enter()
+                    .append('rect')
+                    .attr('class', 'micro-episode')
+                    .attr('x', d => xScale(d.start))
+                    .attr('y', microY)
+                    .attr('width', d => Math.max(1, xScale(d.end) - xScale(d.start)))
+                    .attr('height', microHeight)
+                    .on('mouseover', function(event, d) {
+                        event.stopPropagation();
+                        showTooltip(event, d, 'micro');
+                    })
+                    .on('mouseout', hideTooltip);
+            });
+
+            function showTooltip(event, d, type) {
+                const formatTime = d3.timeFormat('%H:%M:%S');
+                const isMacro = type === 'macro';
+
+                let html = `<div class="tooltip-title">${isMacro ? 'Macro' : 'Micro'} Episode</div>`;
+                html += `<div class="tooltip-row"><span class="tooltip-label">Pattern:</span><span class="tooltip-value">${d.pattern_type || 'unknown'}</span></div>`;
+                html += `<div class="tooltip-row"><span class="tooltip-label">Start:</span><span class="tooltip-value">${formatTime(d.start)}</span></div>`;
+                html += `<div class="tooltip-row"><span class="tooltip-label">End:</span><span class="tooltip-value">${formatTime(d.end)}</span></div>`;
+                html += `<div class="tooltip-row"><span class="tooltip-label">Duration:</span><span class="tooltip-value">${Math.round(d.duration_minutes)} min</span></div>`;
+                html += `<div class="tooltip-row"><span class="tooltip-label">Location:</span><span class="tooltip-value">${d.locations.join(', ')}</span></div>`;
+
+                if (isMacro && d.summary) {
+                    html += `<div class="tooltip-row" style="margin-top: 8px;"><span class="tooltip-value">${d.summary}</span></div>`;
+                }
+
+                if (isMacro && d.semantic_tags && d.semantic_tags.length > 0) {
+                    html += `<div class="tooltip-row" style="margin-top: 4px;"><span class="tooltip-label">Tags:</span><span class="tooltip-value">${d.semantic_tags.join(', ')}</span></div>`;
+                }
+
+                tooltip.html(html)
+                    .style('left', (event.pageX + 10) + 'px')
+                    .style('top', (event.pageY - 10) + 'px')
+                    .classed('visible', true);
+            }
+
+            function hideTooltip() {
+                tooltip.classed('visible', false);
+            }
+        }
+
+        // Load today's data on page load
+        loadToday();
+    </script>
+</body>
+</html>

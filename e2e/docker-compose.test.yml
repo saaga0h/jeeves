@@ -158,6 +158,29 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  observer-agent:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: observer-agent
+    container_name: jeeves-test-observer
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      JEEVES_POSTGRES_HOST: "postgres"
+      JEEVES_POSTGRES_DB: "jeeves_behavior"
+      JEEVES_POSTGRES_USER: "jeeves"
+      JEEVES_POSTGRES_PASSWORD: "jeeves_test"
+      JEEVES_POSTGRES_PORT: 5432
+      JEEVES_LOG_LEVEL: "debug"
+    ports:
+      - 8080:8080
+
   # Testing infrastructure
   observer:
     build:
