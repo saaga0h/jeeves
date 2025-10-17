@@ -83,12 +83,18 @@ func (a *Agent) Start(ctx context.Context) error {
 	}
 	a.logger.Info("Subscribed to occupancy context", "topic", occupancyTopic)
 
-	// Subscribe to illuminance context (for future use / logging)
+	// Subscribe to illuminance context
 	illuminanceTopic := "automation/context/illuminance/+"
 	if err := a.mqtt.Subscribe(illuminanceTopic, 0, a.handleIlluminanceMessage); err != nil {
 		return fmt.Errorf("failed to subscribe to %s: %w", illuminanceTopic, err)
 	}
 	a.logger.Info("Subscribed to illuminance context", "topic", illuminanceTopic)
+
+	rawLightTopic := "automation/raw/light/+"
+	if err := a.mqtt.Subscribe(rawLightTopic, 0, a.handleRawLightStateChange); err != nil {
+		return fmt.Errorf("failed to subscribe to %s: %w", rawLightTopic, err)
+	}
+	a.logger.Info("Subscribed to raw light state changes", "topic", rawLightTopic)
 
 	// Start periodic decision loop
 	a.startPeriodicDecisionLoop()
@@ -242,6 +248,73 @@ func (a *Agent) handleOccupancyMessage(msg mqtt.Message) {
 	}
 }
 
+// NEW: Handle raw light state changes from physical devices
+func (a *Agent) handleRawLightStateChange(msg mqtt.Message) {
+	topic := msg.Topic()
+	payload := msg.Payload()
+
+	// Extract location from topic: automation/raw/light/{location}
+	parts := strings.Split(topic, "/")
+	if len(parts) != 4 {
+		a.logger.Warn("Invalid raw light topic format", "topic", topic)
+		return
+	}
+	location := parts[3]
+
+	// Parse message
+	var lightMsg struct {
+		Data struct {
+			State      string `json:"state"`      // on/off
+			Brightness int    `json:"brightness"` // 0-100
+			ColorTemp  int    `json:"color_temp"` // kelvin
+			Source     string `json:"source"`     // should be "manual" or "external"
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(payload, &lightMsg); err != nil {
+		a.logger.Error("Failed to parse raw light message",
+			"location", location,
+			"error", err)
+		return
+	}
+
+	// If source is manual, set override
+	if lightMsg.Data.Source == "manual" || lightMsg.Data.Source == "external" {
+		expiresAt := a.overrideManager.SetManualOverride(location, a.cfg.ManualOverrideMinutes)
+
+		a.logger.Info("Manual light adjustment detected, override set",
+			"location", location,
+			"state", lightMsg.Data.State,
+			"brightness", lightMsg.Data.Brightness,
+			"expires_at", expiresAt.Format(time.RFC3339))
+
+		// Republish to automation/raw/lighting/{location} with source attribution
+		// so collector can store it
+		timestamp := time.Now().Format(time.RFC3339)
+		rawLightingMsg := map[string]interface{}{
+			"data": map[string]interface{}{
+				"state":      lightMsg.Data.State,
+				"brightness": lightMsg.Data.Brightness,
+				"color_temp": lightMsg.Data.ColorTemp,
+				"source":     "manual",
+				"timestamp":  timestamp,
+			},
+		}
+
+		rawLightingPayload, _ := json.Marshal(rawLightingMsg)
+		rawLightingTopic := fmt.Sprintf("automation/raw/lighting/%s", location)
+
+		if err := a.mqtt.Publish(rawLightingTopic, 0, false, rawLightingPayload); err != nil {
+			a.logger.Error("Failed to publish manual lighting event",
+				"location", location,
+				"error", err)
+		} else {
+			a.logger.Debug("Published manual lighting event",
+				"topic", rawLightingTopic)
+		}
+	}
+}
+
 // handleIlluminanceMessage handles incoming illuminance context messages
 // Currently just logs - illuminance data is read from Redis instead
 func (a *Agent) handleIlluminanceMessage(msg mqtt.Message) {
@@ -330,7 +403,7 @@ func (a *Agent) evaluateLightingNeed(ctx context.Context, location string, occup
 func (a *Agent) publishLightingCommand(location string, decision *Decision) error {
 	timestamp := time.Now().Format(time.RFC3339)
 
-	// Build command message
+	// Build command message (unchanged)
 	commandMsg := map[string]interface{}{
 		"action":     decision.Action,
 		"brightness": decision.Brightness,
@@ -339,7 +412,6 @@ func (a *Agent) publishLightingCommand(location string, decision *Decision) erro
 		"timestamp":  timestamp,
 	}
 
-	// Include color_temp only if non-zero
 	if decision.ColorTemp > 0 {
 		commandMsg["color_temp"] = decision.ColorTemp
 	} else {
@@ -359,7 +431,7 @@ func (a *Agent) publishLightingCommand(location string, decision *Decision) erro
 
 	a.logger.Debug("Published lighting command", "topic", commandTopic)
 
-	// Build context message
+	// Build context message (unchanged)
 	contextMsg := map[string]interface{}{
 		"source":     "light-agent",
 		"type":       "lighting",
@@ -371,14 +443,12 @@ func (a *Agent) publishLightingCommand(location string, decision *Decision) erro
 		"timestamp":  timestamp,
 	}
 
-	// Include color_temp only if non-zero
 	if decision.ColorTemp > 0 {
 		contextMsg["color_temp"] = decision.ColorTemp
 	} else {
 		contextMsg["color_temp"] = nil
 	}
 
-	// Add illuminating flag for "on" state
 	if decision.Action == "on" {
 		contextMsg["illuminating"] = true
 		contextMsg["automated"] = true
@@ -396,6 +466,48 @@ func (a *Agent) publishLightingCommand(location string, decision *Decision) erro
 	}
 
 	a.logger.Debug("Published lighting context", "topic", contextTopic)
+
+	// NEW: Publish raw lighting event for collector
+	if err := a.publishRawLightingEvent(location, decision, timestamp); err != nil {
+		a.logger.Error("Failed to publish raw lighting event",
+			"location", location,
+			"error", err)
+		// Don't fail the entire operation if raw event fails
+	}
+
+	return nil
+}
+
+// publishRawLightingEvent publishes to automation/raw/lighting/{location}
+// This is what the collector picks up and stores in Redis
+func (a *Agent) publishRawLightingEvent(location string, decision *Decision, timestamp string) error {
+	rawMsg := map[string]interface{}{
+		"data": map[string]interface{}{
+			"state":      decision.Action,
+			"brightness": decision.Brightness,
+			"source":     "automated", // Light agent automated decision
+			"timestamp":  timestamp,
+		},
+	}
+
+	// Include color_temp if non-zero
+	if decision.ColorTemp > 0 {
+		rawMsg["data"].(map[string]interface{})["color_temp"] = decision.ColorTemp
+	}
+
+	rawTopic := fmt.Sprintf("automation/raw/lighting/%s", location)
+	rawPayload, err := json.Marshal(rawMsg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal raw lighting event: %w", err)
+	}
+
+	if err := a.mqtt.Publish(rawTopic, 0, false, rawPayload); err != nil {
+		return fmt.Errorf("failed to publish raw lighting event to %s: %w", rawTopic, err)
+	}
+
+	a.logger.Debug("Published raw lighting event",
+		"topic", rawTopic,
+		"source", "automated")
 
 	return nil
 }

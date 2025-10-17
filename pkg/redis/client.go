@@ -180,6 +180,28 @@ func (r *redisClient) LRange(ctx context.Context, key string, start, stop int64)
 	return values, nil
 }
 
+// ZRevRangeByScoreWithScores returns members in a sorted set within a score range with their scores (reverse order - highest first)
+func (r *redisClient) ZRevRangeByScoreWithScores(ctx context.Context, key string, max, min float64, offset, count int64) ([]ZMember, error) {
+	results, err := r.client.ZRevRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
+		Min:    fmt.Sprintf("%f", min),
+		Max:    fmt.Sprintf("%f", max),
+		Offset: offset,
+		Count:  count,
+	}).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sorted set %s: %w", key, err)
+	}
+
+	members := make([]ZMember, len(results))
+	for i, z := range results {
+		members[i] = ZMember{
+			Score:  z.Score,
+			Member: z.Member.(string),
+		}
+	}
+	return members, nil
+}
+
 // Expire sets a TTL on a key
 func (r *redisClient) Expire(ctx context.Context, key string, ttl time.Duration) error {
 	err := r.client.Expire(ctx, key, ttl).Err()

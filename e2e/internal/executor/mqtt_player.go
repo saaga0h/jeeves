@@ -133,13 +133,17 @@ func (p *MQTTPlayer) PublishContextEvent(eventType, location string, data map[st
 	return nil
 }
 
-// PublishMediaEvent publishes media events (play, pause, stop)
+// PublishMediaEvent publishes media events as raw sensor data
 func (p *MQTTPlayer) PublishMediaEvent(location string, data map[string]interface{}) error {
-	// Media events use: automation/media/{action}/{location}
-	action := data["state"].(string) // playing, paused, stopped
-	topic := fmt.Sprintf("automation/media/%s/%s", action, location)
+	// Media events are raw sensors that collector processes: automation/raw/media/{location}
+	topic := fmt.Sprintf("automation/raw/media/%s", location)
 
-	payloadBytes, err := json.Marshal(data)
+	// Wrap in the expected raw sensor format (matching collector expectations)
+	payload := map[string]interface{}{
+		"data": data,
+	}
+
+	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal payload: %w", err)
 	}

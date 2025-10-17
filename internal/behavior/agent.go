@@ -37,7 +37,7 @@ func NewAgent(mqttClient mqtt.Client, redisClient redis.Client, pgClient postgre
 		pgClient:           pgClient,
 		cfg:                cfg,
 		logger:             logger,
-		timeManager:        NewTimeManager(logger), // NEW
+		timeManager:        NewTimeManager(logger),
 		activeEpisodes:     make(map[string]string),
 		lastOccupancyState: make(map[string]string),
 	}, nil
@@ -60,8 +60,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	// Subscribe to context topics
 	topics := []string{
 		"automation/context/occupancy/+",
-		"automation/context/lighting/+",
-		"automation/media/+/+", // New: media events
+		"automation/manual/light/+",
 	}
 
 	for _, topic := range topics {
@@ -77,8 +76,7 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	a.logger.Info("Subscribed to topics", "topics", topics)
 
-	// NEW: Start automatic consolidation job
-	go a.runConsolidationJob(ctx)
+	// go a.runConsolidationJob(ctx)
 
 	// Block until context cancelled
 	<-ctx.Done()
@@ -89,6 +87,227 @@ func (a *Agent) Stop() error {
 	a.logger.Info("Stopping behavior agent")
 	a.mqtt.Disconnect()
 	return a.pgClient.Disconnect()
+}
+
+// checkShouldCloseEpisode determines if episode should close based on activity context
+func (a *Agent) checkShouldCloseEpisode(location string) {
+	ctx := context.Background()
+	now := a.timeManager.Now()
+
+	// Check if media is playing/paused recently
+	if a.hasActiveMedia(ctx, location, now) {
+		a.logger.Debug("Episode kept open - active media detected",
+			"location", location)
+
+		// Schedule delayed check (10 minutes)
+		go a.scheduleDelayedCheck(location, 10*time.Minute)
+		return
+	}
+
+	// Check for recent manual light adjustments
+	if a.hasRecentManualLighting(ctx, location, now) {
+		a.logger.Debug("Episode kept open - recent manual interaction",
+			"location", location)
+
+		// Schedule delayed check (5 minutes)
+		go a.scheduleDelayedCheck(location, 5*time.Minute)
+		return
+	}
+
+	// No activity anchors - safe to close immediately
+	a.logger.Info("No activity anchors, closing episode",
+		"location", location)
+	a.endEpisode(location, "occupancy_empty")
+}
+
+// hasActiveMedia checks if media is playing or recently paused
+func (a *Agent) hasActiveMedia(ctx context.Context, location string, now time.Time) bool {
+	mediaKey := fmt.Sprintf("sensor:media:%s", location)
+
+	// Get most recent media event (last 15 minutes)
+	lookback := now.Add(-15 * time.Minute)
+
+	max := float64(now.UnixMilli())
+	min := float64(lookback.UnixMilli())
+
+	a.logger.Debug("Checking for active media",
+		"location", location,
+		"key", mediaKey,
+		"now", now.Format(time.RFC3339),
+		"lookback", lookback.Format(time.RFC3339),
+		"max_score", max,
+		"min_score", min)
+
+	// Query in reverse order (most recent first), limit 1
+	members, err := a.redis.ZRevRangeByScoreWithScores(ctx, mediaKey, max, min, 0, 1)
+
+	if err != nil {
+		a.logger.Warn("Redis query failed for media data",
+			"location", location,
+			"key", mediaKey,
+			"error", err)
+		return false
+	}
+
+	a.logger.Debug("Media query completed",
+		"location", location,
+		"results_count", len(members))
+
+	if len(members) == 0 {
+		a.logger.Debug("No recent media events found",
+			"location", location,
+			"lookback_minutes", 15)
+		return false
+	}
+
+	a.logger.Debug("Media member found",
+		"location", location,
+		"score", members[0].Score,
+		"member", members[0].Member)
+
+	var mediaData map[string]interface{}
+	if err := json.Unmarshal([]byte(members[0].Member), &mediaData); err != nil {
+		a.logger.Warn("Failed to parse media data from Redis",
+			"location", location,
+			"error", err)
+		return false
+	}
+
+	a.logger.Debug("Parsed media data",
+		"location", location,
+		"data", mediaData)
+
+	state, ok := mediaData["state"].(string)
+	if !ok {
+		return false
+	}
+
+	// Consider "playing" or "paused" as active
+	isActive := state == "playing" || state == "paused"
+
+	a.logger.Info("Media activity check completed",
+		"location", location,
+		"state", state,
+		"is_active", isActive,
+		"timestamp", mediaData["timestamp"])
+
+	if isActive {
+		a.logger.Debug("Active media detected",
+			"location", location,
+			"state", state)
+	}
+
+	return isActive
+}
+
+// hasRecentManualLighting checks for recent manual light adjustments
+func (a *Agent) hasRecentManualLighting(ctx context.Context, location string, now time.Time) bool {
+	lightKey := fmt.Sprintf("sensor:lighting:%s", location)
+
+	// Get most recent lighting event (last 5 minutes)
+	lookback := now.Add(-5 * time.Minute)
+
+	max := float64(now.UnixMilli())
+	min := float64(lookback.UnixMilli())
+
+	a.logger.Debug("Checking for manual lighting",
+		"location", location,
+		"key", lightKey,
+		"now", now.Format(time.RFC3339),
+		"lookback", lookback.Format(time.RFC3339),
+		"max_score", max,
+		"min_score", min)
+
+	// Query in reverse order (most recent first), limit 1
+	members, err := a.redis.ZRevRangeByScoreWithScores(ctx, lightKey, max, min, 0, 1)
+
+	if err != nil {
+		a.logger.Warn("Redis query failed for lighting data",
+			"location", location,
+			"key", lightKey,
+			"error", err)
+		return false
+	}
+
+	a.logger.Debug("Lighting query completed",
+		"location", location,
+		"results_count", len(members))
+
+	if len(members) == 0 {
+		a.logger.Debug("No recent lighting events found",
+			"location", location,
+			"lookback_minutes", 5)
+		return false
+	}
+
+	a.logger.Debug("Lighting member found",
+		"location", location,
+		"score", members[0].Score,
+		"member", members[0].Member)
+
+	var lightData map[string]interface{}
+	if err := json.Unmarshal([]byte(members[0].Member), &lightData); err != nil {
+		a.logger.Warn("Failed to parse lighting data from Redis",
+			"location", location,
+			"error", err)
+		return false
+	}
+
+	a.logger.Debug("Parsed lighting data",
+		"location", location,
+		"data", lightData)
+
+	source, ok := lightData["source"].(string)
+	if !ok {
+		return false
+	}
+
+	isManual := source == "manual"
+
+	a.logger.Info("Manual lighting check completed",
+		"location", location,
+		"source", source,
+		"is_manual", isManual,
+		"timestamp", lightData["timestamp"])
+
+	if isManual {
+		a.logger.Debug("Recent manual lighting interaction detected",
+			"location", location)
+	}
+
+	return isManual
+}
+
+// scheduleDelayedCheck schedules a delayed check to close episode later
+func (a *Agent) scheduleDelayedCheck(location string, delay time.Duration) {
+	time.Sleep(delay)
+
+	// Re-check if episode should close now
+	a.stateMux.RLock()
+	_, exists := a.activeEpisodes[location]
+	currentOccupancy := a.lastOccupancyState[location]
+	a.stateMux.RUnlock()
+
+	if !exists {
+		return // Episode already closed
+	}
+
+	// If still empty and no activity context, close now
+	if currentOccupancy == "empty" {
+		ctx := context.Background()
+		now := a.timeManager.Now()
+
+		if !a.hasActiveMedia(ctx, location, now) &&
+			!a.hasRecentManualLighting(ctx, location, now) {
+			a.logger.Info("Delayed check: closing episode now",
+				"location", location,
+				"delay_was", delay)
+			a.endEpisode(location, "activity_complete")
+		} else {
+			a.logger.Debug("Delayed check: activity still present, keeping open",
+				"location", location)
+		}
+	}
 }
 
 func (a *Agent) handleMessage(msg mqtt.Message) {
@@ -120,12 +339,10 @@ func (a *Agent) handleOccupancyMessage(msg mqtt.Message) {
 
 	if err := json.Unmarshal(msg.Payload(), &simple); err == nil && simple.State != "" {
 		a.stateMux.Lock()
-		defer a.stateMux.Unlock()
-
 		previousState := a.lastOccupancyState[location]
 		currentState := simple.State
-
 		a.lastOccupancyState[location] = currentState
+		a.stateMux.Unlock()
 
 		a.logger.Debug("Occupancy state update",
 			"location", location,
@@ -138,8 +355,9 @@ func (a *Agent) handleOccupancyMessage(msg mqtt.Message) {
 			a.startEpisode(location)
 		}
 
+		// CHANGED: Don't blindly close - check activity context
 		if previousState == "occupied" && currentState == "empty" {
-			a.endEpisode(location, "occupancy_empty")
+			a.checkShouldCloseEpisode(location)
 		}
 		return
 	}
@@ -154,23 +372,22 @@ func (a *Agent) handleOccupancyMessage(msg mqtt.Message) {
 
 	if err := json.Unmarshal(msg.Payload(), &nested); err == nil {
 		a.stateMux.Lock()
-		defer a.stateMux.Unlock()
-
 		previousState := a.lastOccupancyState[location]
 		currentState := "empty"
 		if nested.Data.Occupied {
 			currentState = "occupied"
 		}
-
 		a.lastOccupancyState[location] = currentState
+		a.stateMux.Unlock()
 
 		// Detect transitions
 		if previousState != "occupied" && currentState == "occupied" {
 			a.startEpisode(location)
 		}
 
+		// CHANGED: Don't blindly close - check activity context
 		if previousState == "occupied" && currentState == "empty" {
-			a.endEpisode(location, "occupancy_empty")
+			a.checkShouldCloseEpisode(location)
 		}
 		return
 	}
@@ -414,6 +631,15 @@ func (a *Agent) performConsolidation(ctx context.Context, sinceTime time.Time, l
 	a.publishConsolidationResult(totalMacrosCreated, len(episodes))
 
 	return nil
+}
+
+// extractLocation extracts location from MQTT topic
+func extractLocation(topic string) string {
+	parts := strings.Split(topic, "/")
+	if len(parts) >= 4 {
+		return parts[3]
+	}
+	return ""
 }
 
 // Stubs for other handlers (implement in later iterations)

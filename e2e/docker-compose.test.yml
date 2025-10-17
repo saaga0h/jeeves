@@ -186,7 +186,7 @@ services:
     build:
       context: ..
       dockerfile: e2e/Dockerfile.observer
-    container_name: jeeves-test-observer
+    container_name: jeeves-e2e-test-observer
     environment:
       - MQTT_BROKER=tcp://mosquitto:1883
     volumes:
@@ -200,7 +200,7 @@ services:
     build:
       context: ..
       dockerfile: e2e/Dockerfile.test-runner
-    container_name: jeeves-test-runner
+    container_name: jeeves-e2e-test-runner
     environment:
       - MQTT_BROKER=tcp://mosquitto:1883
       - REDIS_HOST=redis:6379

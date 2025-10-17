@@ -13,18 +13,21 @@ import (
 
 // Agent represents the collector agent that receives sensor data and stores it in Redis
 type Agent struct {
-	mqtt      mqtt.Client
-	redis     redis.Client
-	processor *Processor
-	storage   *Storage
-	cfg       *config.Config
-	logger    *slog.Logger
+	mqtt        mqtt.Client
+	redis       redis.Client
+	processor   *Processor
+	storage     *Storage
+	cfg         *config.Config
+	logger      *slog.Logger
+	timeManager *TimeManager
 }
 
 // NewAgent creates a new collector agent with the given dependencies
 func NewAgent(mqttClient mqtt.Client, redisClient redis.Client, cfg *config.Config, logger *slog.Logger) *Agent {
+	timeManager := NewTimeManager(logger)
+
 	processor := NewProcessor(logger)
-	storage := NewStorage(redisClient, cfg, logger)
+	storage := NewStorage(redisClient, cfg, logger, timeManager)
 
 	return &Agent{
 		mqtt:      mqttClient,
@@ -50,6 +53,11 @@ func (a *Agent) Start(ctx context.Context) error {
 	// Verify Redis connection
 	if err := a.redis.Ping(ctx); err != nil {
 		return fmt.Errorf("failed to ping Redis: %w", err)
+	}
+
+	if err := a.timeManager.ConfigureFromMQTT(a.mqtt); err != nil {
+		a.logger.Warn("Failed to subscribe to test mode config", "error", err)
+		// Not fatal - continue without test mode support
 	}
 
 	// Subscribe to sensor topics

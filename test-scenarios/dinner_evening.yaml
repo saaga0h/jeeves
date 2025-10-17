@@ -1,0 +1,337 @@
+name: Dinner Evening
+description: Multi-location evening routine - cooking (45min), dining (60min), and reading (25min)
+
+setup:
+  location: multi-location
+  initial_state:
+    kitchen: empty
+    dining_room: empty
+    living_room: empty
+
+# Virtual time: 6x speed (2h 10min → ~22 min real time)
+test_mode:
+  virtual_start: "2025-10-17T18:00:00Z"  # 6 PM start
+  time_scale: 6
+
+events:
+  # === COOKING PHASE (45 minutes) ===
+  # Person enters kitchen, starts cooking
+  - time: 0
+    sensor: motion:kitchen
+    value: true
+    description: "Person enters kitchen to start cooking"
+  
+  - time: 0
+    type: occupancy
+    location: kitchen
+    data:
+      state: occupied
+      confidence: 0.85
+    description: "Kitchen occupancy detected"
+  
+  - time: 0
+    type: lighting
+    location: kitchen
+    data:
+      state: on
+      brightness: 80
+      color_temp: 4000
+      source: automated
+    description: "Kitchen lights on (automated)"
+
+  # Active cooking - chopping, prep work
+  - time: 300  # 5 min
+    sensor: motion:kitchen
+    value: true
+    description: "Motion - chopping vegetables"
+
+  - time: 600  # 10 min
+    sensor: motion:kitchen
+    value: true
+    description: "Motion - using stove"
+
+  # Idle period - waiting for water to boil (15 min gap)
+  
+  - time: 900  # 15 min
+    sensor: motion:kitchen
+    value: true
+    description: "Motion - checking pot"
+
+  - time: 1200  # 20 min
+    sensor: motion:kitchen
+    value: true
+    description: "Motion - stirring"
+
+  # Another idle period - oven cooking (10 min gap)
+
+  - time: 1500  # 25 min
+    sensor: motion:kitchen
+    value: true
+    description: "Motion - checking oven"
+
+  - time: 1800  # 30 min
+    sensor: motion:kitchen
+    value: true
+    description: "Motion - plating food"
+
+  - time: 2100  # 35 min
+    sensor: motion:kitchen
+    value: true
+    description: "Motion - final prep"
+
+  - time: 2400  # 40 min
+    sensor: motion:kitchen
+    value: true
+    description: "Motion - carrying food to dining room"
+
+  # Person leaves kitchen for dining room
+  - time: 2700  # 45 min
+    type: occupancy
+    location: kitchen
+    data:
+      state: empty
+      confidence: 0.9
+    description: "Person leaves kitchen"
+
+  # === DINING PHASE (60 minutes) ===
+  # Person enters dining room
+  - time: 2700  # 45 min
+    sensor: motion:dining_room
+    value: true
+    description: "Person enters dining room"
+
+  - time: 2700
+    type: occupancy
+    location: dining_room
+    data:
+      state: occupied
+      confidence: 0.85
+    description: "Dining room occupancy detected"
+
+  - time: 2700
+    type: lighting
+    location: dining_room
+    data:
+      state: on
+      brightness: 60
+      color_temp: 2700
+      source: manual
+    description: "Dining room lights on (manual, warm for dining)"
+
+  # Minimal motion during eating (every 10-15 min)
+  - time: 3300  # 55 min (10 min into dining)
+    sensor: motion:dining_room
+    value: true
+    description: "Motion - reaching for food"
+
+  - time: 3900  # 65 min (20 min into dining)
+    sensor: motion:dining_room
+    value: true
+    description: "Motion - adjusting posture"
+
+  - time: 4500  # 75 min (30 min into dining)
+    sensor: motion:dining_room
+    value: true
+    description: "Motion - getting seconds"
+
+  - time: 5100  # 85 min (40 min into dining)
+    sensor: motion:dining_room
+    value: true
+    description: "Motion - clearing plate"
+
+  - time: 5700  # 95 min (50 min into dining)
+    sensor: motion:dining_room
+    value: true
+    description: "Motion - finishing meal"
+
+  # Person leaves dining room
+  - time: 6300  # 105 min (end of dining)
+    type: occupancy
+    location: dining_room
+    data:
+      state: empty
+      confidence: 0.9
+    description: "Person leaves dining room"
+
+  - time: 6300
+    type: lighting
+    location: dining_room
+    data:
+      state: off
+      brightness: 0
+      source: manual
+    description: "Dining room lights off (manual)"
+
+  # === 12 MINUTE GAP (clearing dishes, bathroom, etc) ===
+  # No events during this period - person doing other activities
+
+  # === READING PHASE (25 minutes) ===
+  # Person enters living room (after 12 min gap)
+  - time: 7020  # 117 min (12 min after dining ended)
+    sensor: motion:living_room
+    value: true
+    description: "Person enters living room for reading"
+
+  - time: 7020
+    type: occupancy
+    location: living_room
+    data:
+      state: occupied
+      confidence: 0.85
+    description: "Living room occupancy detected"
+
+  - time: 7020
+    type: lighting
+    location: living_room
+    data:
+      state: on
+      brightness: 40
+      color_temp: 3000
+      source: manual
+    description: "Reading lamp on (manual, focused light)"
+
+  # Very minimal motion during reading
+  - time: 7620  # 127 min (10 min into reading)
+    sensor: motion:living_room
+    value: true
+    description: "Motion - turning page / adjusting position"
+
+  - time: 8220  # 137 min (20 min into reading)
+    sensor: motion:living_room
+    value: true
+    description: "Motion - shifting in chair"
+
+  # End of reading
+  - time: 8520  # 142 min (end of reading, 25 min session)
+    type: occupancy
+    location: living_room
+    data:
+      state: empty
+      confidence: 0.9
+    description: "Person leaves living room"
+
+  - time: 8520
+    type: lighting
+    location: living_room
+    data:
+      state: off
+      brightness: 0
+      source: manual
+    description: "Reading lamp off (manual)"
+
+  # Trigger consolidation
+  - time: 8620  # 143.67 min
+    type: behavior
+    location: universe
+    data:
+      action: consolidate
+      lookback_hours: 3
+    description: "Consolidation triggered after evening routine"
+
+wait:
+  - time: 8640  # 144 min - wait for processing
+    description: "Wait for all processing to complete"
+
+expectations:
+  behavior_events:
+    # Kitchen episode (cooking)
+    - time: 8640
+      topic: automation/behavior/episode/started
+      payload:
+        location: kitchen
+
+    - time: 8640
+      topic: automation/behavior/episode/closed
+      payload:
+        location: kitchen
+        end_reason: occupancy_empty
+
+    # Dining room episode
+    - time: 8640
+      topic: automation/behavior/episode/started
+      payload:
+        location: dining_room
+
+    - time: 8640
+      topic: automation/behavior/episode/closed
+      payload:
+        location: dining_room
+        end_reason: occupancy_empty
+
+    # Living room episode (reading)
+    - time: 8640
+      topic: automation/behavior/episode/started
+      payload:
+        location: living_room
+
+    - time: 8640
+      topic: automation/behavior/episode/closed
+      payload:
+        location: living_room
+        end_reason: occupancy_empty
+
+  postgres:
+    # Check we have 3 micro-episodes total
+    - time: 8640
+      postgres_query: "SELECT COUNT(*) FROM behavioral_episodes WHERE started_at_text::timestamptz >= '2025-10-17T18:00:00Z'"
+      postgres_expected: 3
+
+    # Kitchen episode duration (~45 min)
+    - time: 8640
+      postgres_query: |
+        SELECT
+          EXTRACT(EPOCH FROM (
+            (jsonld->>'jeeves:endedAt')::timestamptz -
+            (jsonld->>'jeeves:startedAt')::timestamptz
+          ))::int / 60 as duration_minutes
+        FROM behavioral_episodes
+        WHERE location = 'kitchen'
+        ORDER BY started_at_text ASC
+        LIMIT 1
+      postgres_expected: "~45"
+
+    # Dining room episode duration (~60 min)
+    - time: 8640
+      postgres_query: |
+        SELECT
+          EXTRACT(EPOCH FROM (
+            (jsonld->>'jeeves:endedAt')::timestamptz -
+            (jsonld->>'jeeves:startedAt')::timestamptz
+          ))::int / 60 as duration_minutes
+        FROM behavioral_episodes
+        WHERE location = 'dining_room'
+        ORDER BY started_at_text ASC
+        LIMIT 1
+      postgres_expected: "~60"
+
+    # Living room episode duration (~25 min)
+    - time: 8640
+      postgres_query: |
+        SELECT
+          EXTRACT(EPOCH FROM (
+            (jsonld->>'jeeves:endedAt')::timestamptz -
+            (jsonld->>'jeeves:startedAt')::timestamptz
+          ))::int / 60 as duration_minutes
+        FROM behavioral_episodes
+        WHERE location = 'living_room'
+        ORDER BY started_at_text ASC
+        LIMIT 1
+      postgres_expected: "~25"
+
+    # Check for macro-episodes (expect 2-3 depending on LLM)
+    # We'll be flexible here since this is exploratory
+    - time: 8640
+      postgres_query: "SELECT COUNT(*) FROM macro_episodes"
+      postgres_expected: ">0"
+
+    # Check that all micros got consolidated
+    - time: 8640
+      postgres_query: |
+        SELECT COUNT(*)
+        FROM behavioral_episodes
+        WHERE NOT EXISTS (
+          SELECT 1 
+          FROM macro_episodes m
+          WHERE behavioral_episodes.id = ANY(m.micro_episode_ids)
+        )
+      postgres_expected: 0

@@ -2,8 +2,8 @@ name: "Movie Night - With Breaks"
 description: "90-minute movie with two 5-minute bathroom/snack breaks to test micro-episode creation"
 
 test_mode:
-  virtual_start: "2025-10-14T19:00:00Z"  # Saturday evening
-  time_scale: 60  # 100 minutes compressed to ~1.7 minutes
+  virtual_start: "2025-10-17T19:00:00Z"  # Friday evening
+  time_scale: 6  # 100 minutes compressed to ~1.7 minutes
 
 setup:
   location: "living_room"
@@ -214,6 +214,14 @@ events:
       source: "automated"
     description: "Lights turn off"
 
+  - time: 5710
+    type: behavior
+    location: universe
+    data:
+      action: "consolidate"
+      lookback_hours: 2
+    description: "Consolidation triggered after movie night"
+    
 wait:
   - time: 5720
     description: "Wait for all processing to complete"
@@ -318,8 +326,8 @@ expectations:
         SELECT COUNT(*) 
         FROM behavioral_episodes 
         WHERE location = 'living_room'
-          AND started_at_text::timestamptz >= '2025-10-14T19:00:00Z'
-          AND ended_at_text::timestamptz <= '2025-10-14T21:00:00Z'
+          AND started_at_text::timestamptz >= '2025-10-17T19:00:00Z'
+          AND ended_at_text::timestamptz <= '2025-10-17T21:00:00Z'
       postgres_expected: 3
       description: "All 3 episodes are in evening time range (19:00-21:00)"
 

@@ -58,6 +58,9 @@ type Client interface {
 	// Expire sets a TTL on a key
 	Expire(ctx context.Context, key string, ttl time.Duration) error
 
+	// ZRevRangeByScoreWithScores returns members in a sorted set within a score range with their scores (reverse order - highest first)
+	ZRevRangeByScoreWithScores(ctx context.Context, key string, max, min float64, offset, count int64) ([]ZMember, error)
+
 	// Ping checks the connection to Redis
 	Ping(ctx context.Context) error
 
