@@ -515,6 +515,52 @@ func (a *Agent) performConsolidation(ctx context.Context, sinceTime time.Time, l
 			"trigger", ep.TriggerType)
 	}
 
+	// NEW: STEP 1.5: DETECT BEHAVIORAL VECTORS
+	a.logger.Info("--- PHASE 0: VECTOR DETECTION ---")
+
+	// Detect vectors with max 300 second (5 minute) gaps
+	maxGapSeconds := 300
+	vectors := detectVectors(episodes, maxGapSeconds, a.logger)
+
+	a.logger.Info("Vector detection completed",
+		"vectors_detected", len(vectors),
+		"max_gap_seconds", maxGapSeconds)
+
+	// Store vectors in database
+	vectorsStored := 0
+	for i, vector := range vectors {
+		a.logger.Debug("Storing vector",
+			"index", i,
+			"id", vector.ID,
+			"sequence_length", len(vector.Sequence),
+			"quality_score", vector.QualityScore)
+
+		if err := a.storeVector(ctx, vector); err != nil {
+			a.logger.Error("Failed to store vector",
+				"error", err,
+				"vector_id", vector.ID)
+		} else {
+			vectorsStored++
+
+			// Log vector details for debugging
+			locations := make([]string, len(vector.Sequence))
+			for j, node := range vector.Sequence {
+				locations[j] = node.Location
+			}
+
+			a.logger.Info("Vector stored successfully",
+				"vector_id", vector.ID,
+				"locations", fmt.Sprintf("%v", locations),
+				"time_of_day", vector.Context.TimeOfDay,
+				"duration_min", vector.Context.TotalDurationSec/60,
+				"quality", vector.QualityScore)
+		}
+	}
+
+	a.logger.Info("Vector storage completed",
+		"vectors_stored", vectorsStored,
+		"vectors_failed", len(vectors)-vectorsStored)
+
 	totalMacrosCreated := 0
 
 	// STEP 2: Rule-based consolidation
@@ -625,6 +671,8 @@ func (a *Agent) performConsolidation(ctx context.Context, sinceTime time.Time, l
 	// STEP 4: Final summary
 	a.logger.Info("=== CONSOLIDATION ORCHESTRATION COMPLETE ===",
 		"total_episodes_input", len(episodes),
+		"vectors_detected", len(vectors),
+		"vectors_stored", vectorsStored,
 		"rule_based_macros", len(ruleMacros),
 		"total_macros_created", totalMacrosCreated)
 

@@ -30,12 +30,13 @@ func NewAgent(mqttClient mqtt.Client, redisClient redis.Client, cfg *config.Conf
 	storage := NewStorage(redisClient, cfg, logger, timeManager)
 
 	return &Agent{
-		mqtt:      mqttClient,
-		redis:     redisClient,
-		processor: processor,
-		storage:   storage,
-		cfg:       cfg,
-		logger:    logger,
+		mqtt:        mqttClient,
+		redis:       redisClient,
+		processor:   processor,
+		storage:     storage,
+		cfg:         cfg,
+		logger:      logger,
+		timeManager: timeManager,
 	}
 }
 

@@ -149,3 +149,217 @@ func (a *Agent) createMacroEpisode(ctx context.Context, macro *MacroEpisode) err
 
 	return nil
 }
+
+// Add these functions to storage.go
+
+// storeVector persists a behavioral vector to the database
+func (a *Agent) storeVector(ctx context.Context, vector *BehavioralVector) error {
+	// Marshal sequence to JSONB
+	sequenceJSON, err := json.Marshal(vector.Sequence)
+	if err != nil {
+		return fmt.Errorf("failed to marshal sequence: %w", err)
+	}
+
+	// Marshal context to JSONB
+	contextJSON, err := json.Marshal(vector.Context)
+	if err != nil {
+		return fmt.Errorf("failed to marshal context: %w", err)
+	}
+
+	// Marshal edge stats to JSONB
+	edgeStatsJSON, err := json.Marshal(vector.EdgeStats)
+	if err != nil {
+		return fmt.Errorf("failed to marshal edge stats: %w", err)
+	}
+
+	// Convert UUID slice to PostgreSQL array
+	episodeIDs := make([]string, len(vector.MicroEpisodeIDs))
+	for i, id := range vector.MicroEpisodeIDs {
+		episodeIDs[i] = id.String()
+	}
+
+	query := `
+		INSERT INTO behavioral_vectors (
+			id, timestamp, sequence, context, edge_stats,
+			micro_episode_ids, scenario_name, quality_score, created_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`
+
+	_, err = a.pgClient.Exec(ctx, query,
+		vector.ID.String(),
+		vector.Timestamp,
+		sequenceJSON,
+		contextJSON,
+		edgeStatsJSON,
+		pq.Array(episodeIDs),
+		vector.ScenarioName,
+		vector.QualityScore,
+		time.Now(),
+	)
+
+	if err != nil {
+		a.logger.Error("Failed to insert behavioral vector into database",
+			"vector_id", vector.ID,
+			"error", err,
+			"episode_ids", episodeIDs)
+		return fmt.Errorf("failed to insert vector: %w", err)
+	}
+
+	a.logger.Info("Vector stored in database",
+		"vector_id", vector.ID,
+		"locations", len(vector.Sequence),
+		"quality_score", vector.QualityScore)
+
+	return nil
+}
+
+// getRecentVectors retrieves vectors from a time window
+func (a *Agent) getRecentVectors(ctx context.Context, since time.Time, limit int) ([]*BehavioralVector, error) {
+	query := `
+		SELECT 
+			id, timestamp, sequence, context, edge_stats,
+			micro_episode_ids, scenario_name, quality_score, created_at
+		FROM behavioral_vectors
+		WHERE timestamp >= $1
+		ORDER BY timestamp DESC
+		LIMIT $2
+	`
+
+	rows, err := a.pgClient.Query(ctx, query, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	defer rows.Close()
+
+	var vectors []*BehavioralVector
+
+	for rows.Next() {
+		var v BehavioralVector
+		var sequenceJSON, contextJSON, edgeStatsJSON []byte
+		var episodeIDStrings []string
+		var scenarioName *string
+
+		err := rows.Scan(
+			&v.ID,
+			&v.Timestamp,
+			&sequenceJSON,
+			&contextJSON,
+			&edgeStatsJSON,
+			&episodeIDStrings,
+			&scenarioName,
+			&v.QualityScore,
+			&v.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan failed: %w", err)
+		}
+
+		// Unmarshal JSON fields
+		if err := json.Unmarshal(sequenceJSON, &v.Sequence); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal sequence: %w", err)
+		}
+
+		if err := json.Unmarshal(contextJSON, &v.Context); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal context: %w", err)
+		}
+
+		if err := json.Unmarshal(edgeStatsJSON, &v.EdgeStats); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal edge stats: %w", err)
+		}
+
+		// Parse episode IDs
+		v.MicroEpisodeIDs = make([]uuid.UUID, len(episodeIDStrings))
+		for i, idStr := range episodeIDStrings {
+			id, err := uuid.Parse(idStr)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse episode ID: %w", err)
+			}
+			v.MicroEpisodeIDs[i] = id
+		}
+
+		if scenarioName != nil {
+			v.ScenarioName = *scenarioName
+		}
+
+		vectors = append(vectors, &v)
+	}
+
+	return vectors, nil
+}
+
+// getVectorsByPattern finds vectors matching a location sequence pattern
+func (a *Agent) getVectorsByPattern(ctx context.Context, startLocation, secondLocation string, limit int) ([]*BehavioralVector, error) {
+	// Query vectors where first two locations match the pattern
+	query := `
+		SELECT 
+			id, timestamp, sequence, context, edge_stats,
+			micro_episode_ids, scenario_name, quality_score, created_at
+		FROM behavioral_vectors
+		WHERE sequence->0->>'location' = $1
+		  AND sequence->1->>'location' = $2
+		ORDER BY timestamp DESC
+		LIMIT $3
+	`
+
+	rows, err := a.pgClient.Query(ctx, query, startLocation, secondLocation, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	defer rows.Close()
+
+	var vectors []*BehavioralVector
+
+	for rows.Next() {
+		var v BehavioralVector
+		var sequenceJSON, contextJSON, edgeStatsJSON []byte
+		var episodeIDStrings []string
+		var scenarioName *string
+
+		err := rows.Scan(
+			&v.ID,
+			&v.Timestamp,
+			&sequenceJSON,
+			&contextJSON,
+			&edgeStatsJSON,
+			&episodeIDStrings,
+			&scenarioName,
+			&v.QualityScore,
+			&v.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan failed: %w", err)
+		}
+
+		// Unmarshal JSON fields
+		if err := json.Unmarshal(sequenceJSON, &v.Sequence); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal sequence: %w", err)
+		}
+
+		if err := json.Unmarshal(contextJSON, &v.Context); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal context: %w", err)
+		}
+
+		if err := json.Unmarshal(edgeStatsJSON, &v.EdgeStats); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal edge stats: %w", err)
+		}
+
+		// Parse episode IDs
+		v.MicroEpisodeIDs = make([]uuid.UUID, len(episodeIDStrings))
+		for i, idStr := range episodeIDStrings {
+			id, err := uuid.Parse(idStr)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse episode ID: %w", err)
+			}
+			v.MicroEpisodeIDs[i] = id
+		}
+
+		if scenarioName != nil {
+			v.ScenarioName = *scenarioName
+		}
+
+		vectors = append(vectors, &v)
+	}
+
+	return vectors, nil
+}

@@ -1,0 +1,464 @@
+name: "Morning Routine - Vector Pattern Detection"
+description: |
+  Tests vector-based episode consolidation with realistic morning routine.
+  Generates clear behavioral sequences that should form semantic patterns:
+  1. Wake sequence: bedroom → bathroom → kitchen (morning preparation)
+  2. Breakfast sequence: kitchen → dining_room → kitchen (meal preparation and consumption)  
+  3. Work transition: kitchen → hallway → study (commencing work)
+  
+  Expected vectors with gaps:
+  - Vector 1: bedroom(5m) -0s-> bathroom(3m) -0s-> kitchen(12m)
+  - Vector 2: kitchen(12m) -0s-> dining_room(15m) -0s-> kitchen(3m)
+  - Vector 3: kitchen(3m) -0s-> hallway(1m) -0s-> study(7m)
+  
+  Key test: Should dining_room with no motion but light on/off be part of meal vector?
+
+setup:
+  location: multi-location
+  initial_state:
+    bedroom: empty
+    bathroom: empty
+    kitchen: empty
+    dining_room: empty
+    hallway: empty
+    study: empty
+
+test_mode:
+  virtual_start: "2025-10-17T07:00:00Z"  # Friday morning
+  time_scale: 6  # 45 min compressed to ~7.5 min real time
+
+events:
+  # ============================================
+  # WAKE UP SEQUENCE (7:00 - 7:05)
+  # ============================================
+  - time: 0
+    sensor: motion:bedroom
+    value: true
+    description: "Wake up, getting dressed"
+
+  - time: 0
+    type: occupancy
+    location: bedroom
+    description: "Morning bedroom occupancy"
+    data:
+      state: occupied
+      confidence: 0.85
+
+  - time: 30
+    type: lighting
+    location: bedroom
+    data:
+      state: on
+      brightness: 40
+      color_temp: 2700
+      source: automated
+    description: "Morning automated dim lighting"
+
+  - time: 300
+    type: occupancy
+    location: bedroom
+    data:
+      state: empty
+      confidence: 0.9
+    description: "Leaving bedroom after 5 minutes"
+
+  # ============================================
+  # BATHROOM STOP (7:05 - 7:08)
+  # ============================================
+  - time: 300
+    sensor: motion:bathroom
+    value: true
+    description: "Morning bathroom routine"
+
+  - time: 300
+    type: occupancy
+    location: bathroom
+    description: "Morning bathroom occupancy"
+    data:
+      state: occupied
+      confidence: 0.85
+
+  - time: 305
+    type: lighting
+    location: bathroom
+    data:
+      state: on
+      brightness: 90
+      color_temp: 5000
+      source: automated
+    description: "Bright bathroom lighting"
+
+  - time: 480
+    type: occupancy
+    location: bathroom
+    data:
+      state: empty
+      confidence: 0.9
+    description: "Bathroom routine complete (3 min)"
+
+  - time: 485
+    type: lighting
+    location: bathroom
+    description: "Bathroom light auto-off"
+    data:
+      state: off
+      source: automated
+
+  # ============================================
+  # BREAKFAST PREPARATION (7:08 - 7:20)
+  # ============================================
+  - time: 480
+    sensor: motion:kitchen
+    value: true
+    description: "Start breakfast preparation"
+
+  - time: 480
+    type: occupancy
+    location: kitchen
+    description: "Morning kitchen occupancy"
+    data:
+      state: occupied
+      confidence: 0.85
+
+  - time: 485
+    type: lighting
+    location: kitchen
+    data:
+      state: on
+      brightness: 80
+      color_temp: 4000
+      source: automated
+    description: "Kitchen work lighting"
+
+  # Intermittent motion during cooking
+  - time: 540
+    sensor: motion:kitchen
+    value: true
+    description: "Active cooking - sporadic motion"
+
+  - time: 720
+    sensor: motion:kitchen
+    value: true
+    description: "Still cooking"
+
+  - time: 900
+    sensor: motion:kitchen
+    value: true
+    description: "Finishing breakfast prep"
+
+  - time: 1200
+    type: occupancy
+    location: kitchen
+    data:
+      state: empty
+      confidence: 0.9
+    description: "Kitchen prep complete (12 min total)"
+
+  # ============================================
+  # EATING BREAKFAST (7:20 - 7:35)
+  # ============================================
+  # Key test: No motion sensor in dining room, only light control
+  - time: 1200
+    type: lighting
+    location: dining_room
+    data:
+      state: on
+      brightness: 60
+      color_temp: 2700
+      source: manual
+    description: "Manual warm lighting for dining"
+
+  # Person is sitting and eating - no motion events
+  # Just the light being on indicates occupancy
+
+  - time: 2100
+    type: lighting
+    location: dining_room
+    data:
+      state: off
+      source: manual
+    description: "Finished eating (15 min), light turned off"
+
+  # ============================================
+  # KITCHEN CLEANUP (7:35 - 7:38)
+  # ============================================
+  - time: 2100
+    sensor: motion:kitchen
+    value: true
+    description: "Quick cleanup after breakfast"
+
+  - time: 2100
+    type: occupancy
+    location: kitchen
+    description: "Morning kitchen cleanup occupancy"
+    data:
+      state: occupied
+      confidence: 0.85
+
+  - time: 2280
+    type: occupancy
+    location: kitchen
+    data:
+      state: empty
+      confidence: 0.9
+    description: "Cleanup complete (3 min)"
+
+  # ============================================
+  # TRANSITION TO WORK (7:38 - 7:45)
+  # ============================================
+  - time: 2280
+    sensor: motion:hallway
+    value: true
+    description: "Walking to study"
+
+  - time: 2280
+    type: occupancy
+    location: hallway
+    description: "Hallway transit occupancy"
+    data:
+      state: occupied
+      confidence: 0.85
+
+  - time: 2340
+    type: occupancy
+    location: hallway
+    data:
+      state: empty
+      confidence: 0.9
+    description: "Brief hallway transit (1 min)"
+
+  - time: 2340
+    sensor: motion:study
+    value: true
+    description: "Arriving at study"
+
+  - time: 2340
+    type: occupancy
+    location: study
+    description: "Study occupancy on arrival"
+    data:
+      state: occupied
+      confidence: 0.85
+
+  - time: 2345
+    type: lighting
+    location: study
+    data:
+      state: on
+      brightness: 90
+      color_temp: 5000
+      source: manual
+    description: "Bright focused work lighting"
+
+  - time: 2700
+    type: occupancy
+    location: study
+    data:
+      state: empty
+      confidence: 0.9
+    description: "Scenario end - still in study (6 min settled)"
+
+  # Automatic kitchen light off from earlier
+  - time: 2400
+    type: lighting
+    location: kitchen
+    data:
+      state: off
+      source: automated
+    description: "Kitchen light auto-off after inactivity"
+
+  # Trigger consolidation
+  - time: 2750
+    type: behavior
+    location: universe
+    data:
+      action: consolidate
+      lookback_hours: 2
+    description: "Consolidation triggered after morning routine"
+
+wait:
+  - time: 2800
+    description: "Wait for all processing to complete"
+
+# Expected behavioral vectors to be detected
+expectations:
+  behavior_events:
+    # Should have episode start/close for each location
+    - time: 2800
+      topic: automation/behavior/episode/started
+      payload:
+        location: bedroom
+
+    - time: 2800
+      topic: automation/behavior/episode/closed
+      payload:
+        location: bedroom
+        end_reason: occupancy_empty
+
+  postgres:
+    # Should have created micro-episodes for each location visit
+    - time: 2800
+      postgres_query: |
+        SELECT COUNT(*) FROM behavioral_episodes 
+        WHERE started_at_text::timestamptz >= '2025-10-17T07:00:00Z'
+      postgres_expected: 6
+      description: "Six micro-episodes: bedroom, bathroom, kitchen(prep), kitchen(cleanup), hallway, study"
+
+    # Verify bedroom episode (~5 min)
+    - time: 2800
+      postgres_query: |
+        SELECT 
+          EXTRACT(EPOCH FROM (
+            (jsonld->>'jeeves:endedAt')::timestamptz - 
+            (jsonld->>'jeeves:startedAt')::timestamptz
+          ))::int / 60 as duration_minutes
+        FROM behavioral_episodes 
+        WHERE location = 'bedroom'
+        ORDER BY started_at_text ASC
+        LIMIT 1
+      postgres_expected: "~5"
+      description: "Bedroom episode is ~5 minutes"
+
+    # Verify bathroom episode (~3 min)
+    - time: 2800
+      postgres_query: |
+        SELECT 
+          EXTRACT(EPOCH FROM (
+            (jsonld->>'jeeves:endedAt')::timestamptz - 
+            (jsonld->>'jeeves:startedAt')::timestamptz
+          ))::int / 60 as duration_minutes
+        FROM behavioral_episodes 
+        WHERE location = 'bathroom'
+        ORDER BY started_at_text ASC
+        LIMIT 1
+      postgres_expected: "~3"
+      description: "Bathroom episode is ~3 minutes"
+
+    # Verify first kitchen episode (~12 min prep)
+    - time: 2800
+      postgres_query: |
+        SELECT 
+          EXTRACT(EPOCH FROM (
+            (jsonld->>'jeeves:endedAt')::timestamptz - 
+            (jsonld->>'jeeves:startedAt')::timestamptz
+          ))::int / 60 as duration_minutes
+        FROM behavioral_episodes 
+        WHERE location = 'kitchen'
+        ORDER BY started_at_text ASC
+        LIMIT 1
+      postgres_expected: "~12"
+      description: "First kitchen episode (prep) is ~12 minutes"
+
+    # Verify second kitchen episode (~3 min cleanup)
+    - time: 2800
+      postgres_query: |
+        SELECT 
+          EXTRACT(EPOCH FROM (
+            (jsonld->>'jeeves:endedAt')::timestamptz - 
+            (jsonld->>'jeeves:startedAt')::timestamptz
+          ))::int / 60 as duration_minutes
+        FROM behavioral_episodes 
+        WHERE location = 'kitchen'
+        ORDER BY started_at_text DESC
+        LIMIT 1
+      postgres_expected: "~3"
+      description: "Second kitchen episode (cleanup) is ~3 minutes"
+
+    # Verify hallway is brief transit (~1 min)
+    - time: 2800
+      postgres_query: |
+        SELECT 
+          EXTRACT(EPOCH FROM (
+            (jsonld->>'jeeves:endedAt')::timestamptz - 
+            (jsonld->>'jeeves:startedAt')::timestamptz
+          ))::int / 60 as duration_minutes
+        FROM behavioral_episodes 
+        WHERE location = 'hallway'
+        ORDER BY started_at_text ASC
+        LIMIT 1
+      postgres_expected: "~1"
+      description: "Hallway transit is ~1 minute"
+
+    # Check for sequential ordering (no temporal overlap)
+    - time: 2800
+      postgres_query: |
+        SELECT COUNT(*) FROM (
+          SELECT 
+            started_at_text,
+            LAG(ended_at_text) OVER (ORDER BY started_at_text) as prev_end
+          FROM behavioral_episodes
+          WHERE started_at_text::timestamptz >= '2025-10-17T07:00:00Z'
+        ) t
+        WHERE prev_end IS NOT NULL 
+          AND started_at_text::timestamptz >= prev_end::timestamptz
+      postgres_expected: 5
+      description: "Episodes are properly sequential (5 transitions)"
+
+    # VECTOR DETECTION: Check for stored behavioral vectors
+    # These would be stored by new VectorDebugger/storage code
+    - time: 2800
+      postgres_query: |
+        SELECT COUNT(*) FROM behavioral_vectors
+        WHERE timestamp >= '2025-10-17T07:00:00Z'
+      postgres_expected: ">=3"
+      description: "At least 3 behavioral vectors detected"
+
+    # Vector 1: morning prep sequence (bedroom -> bathroom -> kitchen)
+    - time: 2800
+      postgres_query: |
+        SELECT COUNT(*) FROM behavioral_vectors
+        WHERE timestamp >= '2025-10-17T07:00:00Z'
+          AND sequence @> '[{"location": "bedroom"}, {"location": "bathroom"}, {"location": "kitchen"}]'::jsonb
+      postgres_expected: ">=1"
+      description: "Wake-up preparation vector detected: bedroom→bathroom→kitchen"
+
+    # Vector 2: breakfast cycle (kitchen -> dining_room -> kitchen)
+    - time: 2800
+      postgres_query: |
+        SELECT COUNT(*) FROM behavioral_vectors
+        WHERE timestamp >= '2025-10-17T07:00:00Z'
+          AND sequence::text LIKE '%kitchen%dining_room%kitchen%'
+      postgres_expected: ">=1"
+      description: "Breakfast cycle vector detected: kitchen→dining_room→kitchen"
+
+    # Vector 3: work transition (hallway -> study)
+    - time: 2800
+      postgres_query: |
+        SELECT COUNT(*) FROM behavioral_vectors
+        WHERE timestamp >= '2025-10-17T07:00:00Z'
+          AND sequence @> '[{"location": "hallway"}, {"location": "study"}]'::jsonb
+      postgres_expected: ">=1"
+      description: "Work transition vector detected: hallway→study"
+
+    # Check vector edges have zero or near-zero gaps (immediate transitions)
+    - time: 2800
+      postgres_query: |
+        SELECT COUNT(*) FROM behavioral_vectors
+        WHERE timestamp >= '2025-10-17T07:00:00Z'
+          AND (context->>'transition_count')::int >= 2
+          AND NOT EXISTS (
+            SELECT 1 FROM jsonb_array_elements(sequence) elem
+            WHERE (elem->>'gap_to_next')::int > 60
+          )
+      postgres_expected: ">=2"
+      description: "Vectors have tight transitions (gaps < 60 seconds)"
+
+    # Check macro-episode consolidation happened
+    - time: 2800
+      postgres_query: "SELECT COUNT(*) FROM macro_episodes"
+      postgres_expected: ">0"
+      description: "At least one macro-episode created from consolidation"
+
+    # Verify all micro-episodes got consolidated
+    - time: 2800
+      postgres_query: |
+        SELECT COUNT(*)
+        FROM behavioral_episodes
+        WHERE started_at_text::timestamptz >= '2025-10-17T07:00:00Z'
+          AND NOT EXISTS (
+            SELECT 1 
+            FROM macro_episodes m
+            WHERE behavioral_episodes.id = ANY(m.micro_episode_ids)
+          )
+      postgres_expected: 0
+      description: "All micro-episodes were consolidated into macro-episodes"
