@@ -7,7 +7,13 @@
       "Bash(go build:*)",
       "Bash(make:*)",
       "Bash(go doc:*)",
-      "Bash(go mod:*)"
+      "Bash(go mod:*)",
+      "Bash(docker exec:*)",
+      "Read(///**)",
+      "Bash(find:*)",
+      "Bash(docker logs:*)",
+      "Bash(cat:*)",
+      "Bash(python3:*)"
     ],
     "deny": [],
     "ask": []

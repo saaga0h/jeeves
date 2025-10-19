@@ -8,8 +8,8 @@ description: |
   
   Expected vectors with gaps:
   - Vector 1: bedroom(5m) -0s-> bathroom(3m) -0s-> kitchen(12m)
-  - Vector 2: kitchen(12m) -0s-> dining_room(15m) -0s-> kitchen(3m)
-  - Vector 3: kitchen(3m) -0s-> hallway(1m) -0s-> study(7m)
+  - Vector 2: kitchen(12m) -120s-> dining_room(15m) -120s-> kitchen(3m)
+  - Vector 3: kitchen(3m) -0s-> hallway(1m) -0s-> study(6m)
   
   Key test: Should dining_room with no motion but light on/off be part of meal vector?
 
@@ -155,10 +155,11 @@ events:
     description: "Kitchen prep complete (12 min total)"
 
   # ============================================
-  # EATING BREAKFAST (7:20 - 7:35)
+  # EATING BREAKFAST (7:22 - 7:37)
   # ============================================
   # Key test: No motion sensor in dining room, only light control
-  - time: 1200
+  # 2-minute gap after kitchen (1200 + 120 = 1320)
+  - time: 1320
     type: lighting
     location: dining_room
     data:
@@ -166,12 +167,12 @@ events:
       brightness: 60
       color_temp: 2700
       source: manual
-    description: "Manual warm lighting for dining"
+    description: "Manual warm lighting for dining (2 min after kitchen)"
 
   # Person is sitting and eating - no motion events
   # Just the light being on indicates occupancy
 
-  - time: 2100
+  - time: 2220
     type: lighting
     location: dining_room
     data:
@@ -180,14 +181,15 @@ events:
     description: "Finished eating (15 min), light turned off"
 
   # ============================================
-  # KITCHEN CLEANUP (7:35 - 7:38)
+  # KITCHEN CLEANUP (7:39 - 7:42)
   # ============================================
-  - time: 2100
+  # 2-minute gap after dining_room (2220 + 120 = 2340)
+  - time: 2340
     sensor: motion:kitchen
     value: true
-    description: "Quick cleanup after breakfast"
+    description: "Quick cleanup after breakfast (2 min after dining)"
 
-  - time: 2100
+  - time: 2340
     type: occupancy
     location: kitchen
     description: "Morning kitchen cleanup occupancy"
@@ -195,7 +197,7 @@ events:
       state: occupied
       confidence: 0.85
 
-  - time: 2280
+  - time: 2520
     type: occupancy
     location: kitchen
     data:
@@ -204,14 +206,14 @@ events:
     description: "Cleanup complete (3 min)"
 
   # ============================================
-  # TRANSITION TO WORK (7:38 - 7:45)
+  # TRANSITION TO WORK (7:42 - 7:49)
   # ============================================
-  - time: 2280
+  - time: 2520
     sensor: motion:hallway
     value: true
     description: "Walking to study"
 
-  - time: 2280
+  - time: 2520
     type: occupancy
     location: hallway
     description: "Hallway transit occupancy"
@@ -219,7 +221,7 @@ events:
       state: occupied
       confidence: 0.85
 
-  - time: 2340
+  - time: 2580
     type: occupancy
     location: hallway
     data:
@@ -227,12 +229,12 @@ events:
       confidence: 0.9
     description: "Brief hallway transit (1 min)"
 
-  - time: 2340
+  - time: 2580
     sensor: motion:study
     value: true
     description: "Arriving at study"
 
-  - time: 2340
+  - time: 2580
     type: occupancy
     location: study
     description: "Study occupancy on arrival"
@@ -240,7 +242,7 @@ events:
       state: occupied
       confidence: 0.85
 
-  - time: 2345
+  - time: 2585
     type: lighting
     location: study
     data:
@@ -250,7 +252,7 @@ events:
       source: manual
     description: "Bright focused work lighting"
 
-  - time: 2700
+  - time: 2940
     type: occupancy
     location: study
     data:
@@ -259,7 +261,7 @@ events:
     description: "Scenario end - still in study (6 min settled)"
 
   # Automatic kitchen light off from earlier
-  - time: 2400
+  - time: 2640
     type: lighting
     location: kitchen
     data:
@@ -268,7 +270,7 @@ events:
     description: "Kitchen light auto-off after inactivity"
 
   # Trigger consolidation
-  - time: 2750
+  - time: 2990
     type: behavior
     location: universe
     data:
@@ -277,19 +279,19 @@ events:
     description: "Consolidation triggered after morning routine"
 
 wait:
-  - time: 2800
+  - time: 3040
     description: "Wait for all processing to complete"
 
 # Expected behavioral vectors to be detected
 expectations:
   behavior_events:
     # Should have episode start/close for each location
-    - time: 2800
+    - time: 3040
       topic: automation/behavior/episode/started
       payload:
         location: bedroom
 
-    - time: 2800
+    - time: 3040
       topic: automation/behavior/episode/closed
       payload:
         location: bedroom
@@ -297,7 +299,7 @@ expectations:
 
   postgres:
     # Should have created micro-episodes for each location visit
-    - time: 2800
+    - time: 3040
       postgres_query: |
         SELECT COUNT(*) FROM behavioral_episodes 
         WHERE started_at_text::timestamptz >= '2025-10-17T07:00:00Z'
@@ -305,7 +307,7 @@ expectations:
       description: "Six micro-episodes: bedroom, bathroom, kitchen(prep), kitchen(cleanup), hallway, study"
 
     # Verify bedroom episode (~5 min)
-    - time: 2800
+    - time: 3040
       postgres_query: |
         SELECT 
           EXTRACT(EPOCH FROM (
@@ -320,7 +322,7 @@ expectations:
       description: "Bedroom episode is ~5 minutes"
 
     # Verify bathroom episode (~3 min)
-    - time: 2800
+    - time: 3040
       postgres_query: |
         SELECT 
           EXTRACT(EPOCH FROM (
@@ -335,7 +337,7 @@ expectations:
       description: "Bathroom episode is ~3 minutes"
 
     # Verify first kitchen episode (~12 min prep)
-    - time: 2800
+    - time: 3040
       postgres_query: |
         SELECT 
           EXTRACT(EPOCH FROM (
@@ -350,7 +352,7 @@ expectations:
       description: "First kitchen episode (prep) is ~12 minutes"
 
     # Verify second kitchen episode (~3 min cleanup)
-    - time: 2800
+    - time: 3040
       postgres_query: |
         SELECT 
           EXTRACT(EPOCH FROM (
@@ -365,7 +367,7 @@ expectations:
       description: "Second kitchen episode (cleanup) is ~3 minutes"
 
     # Verify hallway is brief transit (~1 min)
-    - time: 2800
+    - time: 3040
       postgres_query: |
         SELECT 
           EXTRACT(EPOCH FROM (
@@ -380,7 +382,7 @@ expectations:
       description: "Hallway transit is ~1 minute"
 
     # Check for sequential ordering (no temporal overlap)
-    - time: 2800
+    - time: 3040
       postgres_query: |
         SELECT COUNT(*) FROM (
           SELECT 
@@ -396,7 +398,7 @@ expectations:
 
     # VECTOR DETECTION: Check for stored behavioral vectors
     # These would be stored by new VectorDebugger/storage code
-    - time: 2800
+    - time: 3040
       postgres_query: |
         SELECT COUNT(*) FROM behavioral_vectors
         WHERE timestamp >= '2025-10-17T07:00:00Z'
@@ -404,7 +406,7 @@ expectations:
       description: "At least 3 behavioral vectors detected"
 
     # Vector 1: morning prep sequence (bedroom -> bathroom -> kitchen)
-    - time: 2800
+    - time: 3040
       postgres_query: |
         SELECT COUNT(*) FROM behavioral_vectors
         WHERE timestamp >= '2025-10-17T07:00:00Z'
@@ -413,7 +415,7 @@ expectations:
       description: "Wake-up preparation vector detected: bedroom→bathroom→kitchen"
 
     # Vector 2: breakfast cycle (kitchen -> dining_room -> kitchen)
-    - time: 2800
+    - time: 3040
       postgres_query: |
         SELECT COUNT(*) FROM behavioral_vectors
         WHERE timestamp >= '2025-10-17T07:00:00Z'
@@ -422,7 +424,7 @@ expectations:
       description: "Breakfast cycle vector detected: kitchen→dining_room→kitchen"
 
     # Vector 3: work transition (hallway -> study)
-    - time: 2800
+    - time: 3040
       postgres_query: |
         SELECT COUNT(*) FROM behavioral_vectors
         WHERE timestamp >= '2025-10-17T07:00:00Z'
@@ -431,7 +433,7 @@ expectations:
       description: "Work transition vector detected: hallway→study"
 
     # Check vector edges have zero or near-zero gaps (immediate transitions)
-    - time: 2800
+    - time: 3040
       postgres_query: |
         SELECT COUNT(*) FROM behavioral_vectors
         WHERE timestamp >= '2025-10-17T07:00:00Z'
@@ -444,13 +446,13 @@ expectations:
       description: "Vectors have tight transitions (gaps < 60 seconds)"
 
     # Check macro-episode consolidation happened
-    - time: 2800
+    - time: 3040
       postgres_query: "SELECT COUNT(*) FROM macro_episodes"
       postgres_expected: ">0"
       description: "At least one macro-episode created from consolidation"
 
     # Verify all micro-episodes got consolidated
-    - time: 2800
+    - time: 3040
       postgres_query: |
         SELECT COUNT(*)
         FROM behavioral_episodes

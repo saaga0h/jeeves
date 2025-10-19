@@ -334,21 +334,25 @@ func calculateVectorQuality(nodes []VectorNode, edgeStats map[string]EdgeStatist
 func inferSensors(ep *MicroEpisode) []string {
 	sensors := []string{}
 
-	// Based on trigger type, infer sensors
-	if ep.TriggerType == "occupancy_transition" {
+	// Based on trigger type, infer primary sensor
+	switch ep.TriggerType {
+	case "occupancy_transition":
+		sensors = append(sensors, "motion")
+	case "manual_lighting":
+		sensors = append(sensors, "lighting")
+	default:
+		// Default to motion for backwards compatibility
 		sensors = append(sensors, "motion")
 	}
 
-	// Check for manual actions (indicates lighting sensor)
-	if len(ep.ManualActions) > 0 {
+	// Check for manual actions (indicates additional lighting interactions)
+	// Only add "lighting" if not already the primary sensor
+	if len(ep.ManualActions) > 0 && ep.TriggerType != "manual_lighting" {
 		sensors = append(sensors, "lighting")
 	}
 
 	// Could add more sensor inference logic here
-	// For now, default to motion if nothing else
-	if len(sensors) == 0 {
-		sensors = append(sensors, "motion")
-	}
+	// e.g., media interactions, temperature changes, etc.
 
 	return sensors
 }

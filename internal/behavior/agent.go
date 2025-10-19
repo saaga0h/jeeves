@@ -24,10 +24,12 @@ type Agent struct {
 	cfg      *config.Config
 	logger   *slog.Logger
 
-	timeManager        *TimeManager      // NEW
-	activeEpisodes     map[string]string // location → episode ID
-	lastOccupancyState map[string]string // location → "occupied" | "empty"
-	stateMux           sync.RWMutex
+	timeManager         *TimeManager      // NEW
+	activeEpisodes      map[string]string // location → episode ID
+	lastEpisodeEndTime  map[string]time.Time // location → when last episode ended
+	lastOccupancyState  map[string]string // location → "occupied" | "empty"
+	lastLightState      map[string]string // location → "on" | "off" | "unknown"
+	stateMux            sync.RWMutex
 }
 
 func NewAgent(mqttClient mqtt.Client, redisClient redis.Client, pgClient postgres.Client, cfg *config.Config, logger *slog.Logger) (*Agent, error) {
@@ -39,7 +41,9 @@ func NewAgent(mqttClient mqtt.Client, redisClient redis.Client, pgClient postgre
 		logger:             logger,
 		timeManager:        NewTimeManager(logger),
 		activeEpisodes:     make(map[string]string),
+		lastEpisodeEndTime: make(map[string]time.Time),
 		lastOccupancyState: make(map[string]string),
+		lastLightState:     make(map[string]string),
 	}, nil
 }
 
@@ -60,7 +64,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	// Subscribe to context topics
 	topics := []string{
 		"automation/context/occupancy/+",
-		"automation/manual/light/+",
+		"automation/context/lighting/+",
 	}
 
 	for _, topic := range topics {
@@ -352,10 +356,10 @@ func (a *Agent) handleOccupancyMessage(msg mqtt.Message) {
 
 		// Detect transitions
 		if previousState != "occupied" && currentState == "occupied" {
-			a.startEpisode(location)
+			a.startEpisode(location, "occupancy_transition")
 		}
 
-		// CHANGED: Don't blindly close - check activity context
+		// Check if episode should close when occupancy becomes empty
 		if previousState == "occupied" && currentState == "empty" {
 			a.checkShouldCloseEpisode(location)
 		}
@@ -382,10 +386,10 @@ func (a *Agent) handleOccupancyMessage(msg mqtt.Message) {
 
 		// Detect transitions
 		if previousState != "occupied" && currentState == "occupied" {
-			a.startEpisode(location)
+			a.startEpisode(location, "occupancy_transition")
 		}
 
-		// CHANGED: Don't blindly close - check activity context
+		// Check if episode should close when occupancy becomes empty
 		if previousState == "occupied" && currentState == "empty" {
 			a.checkShouldCloseEpisode(location)
 		}
@@ -397,8 +401,34 @@ func (a *Agent) handleOccupancyMessage(msg mqtt.Message) {
 		"payload", string(msg.Payload()))
 }
 
-func (a *Agent) startEpisode(location string) {
+func (a *Agent) startEpisode(location, triggerType string) {
 	now := a.timeManager.Now() // Changed from time.Now()
+
+	a.stateMux.Lock()
+	_, exists := a.activeEpisodes[location]
+	lastEndTime, hasRecentEnd := a.lastEpisodeEndTime[location]
+	a.stateMux.Unlock()
+
+	// Check if episode already active
+	if exists {
+		a.logger.Debug("Episode already active, skipping duplicate creation",
+			"location", location,
+			"trigger_type", triggerType)
+		return
+	}
+
+	// Check if an episode was recently closed (within last 10 minutes)
+	// This prevents occupancy agent predictions from creating spurious episodes
+	if hasRecentEnd {
+		timeSinceLastEpisode := now.Sub(lastEndTime)
+		if timeSinceLastEpisode < 10*time.Minute {
+			a.logger.Debug("Episode recently closed, skipping spurious creation",
+				"location", location,
+				"trigger_type", triggerType,
+				"time_since_last", timeSinceLastEpisode)
+			return
+		}
+	}
 
 	// Create episode with virtual time
 	episode := ontology.NewEpisode(
@@ -416,8 +446,12 @@ func (a *Agent) startEpisode(location string) {
 	// Override the timestamp with virtual time
 	episode.StartedAt = now
 
-	// Store in Postgres
-	jsonld, _ := json.Marshal(episode)
+	// Add trigger type to the JSON-LD
+	episodeJSON, _ := json.Marshal(episode)
+	var episodeMap map[string]interface{}
+	json.Unmarshal(episodeJSON, &episodeMap)
+	episodeMap["jeeves:triggerType"] = triggerType
+	jsonld, _ := json.Marshal(episodeMap)
 
 	var id string
 	err := a.pgClient.QueryRow(context.Background(),
@@ -430,18 +464,24 @@ func (a *Agent) startEpisode(location string) {
 		return
 	}
 
+	a.stateMux.Lock()
 	a.activeEpisodes[location] = id
-	a.logger.Info("Episode started", "location", location, "id", id)
+	a.stateMux.Unlock()
+
+	a.logger.Info("Episode started", "location", location, "id", id, "trigger_type", triggerType)
 
 	// Publish event
 	a.publishEpisodeEvent("started", map[string]interface{}{
 		"location":     location,
-		"trigger_type": "occupancy_transition",
+		"trigger_type": triggerType,
 	})
 }
 
 func (a *Agent) endEpisode(location string, reason string) {
+	a.stateMux.Lock()
 	id, exists := a.activeEpisodes[location]
+	a.stateMux.Unlock()
+
 	if !exists {
 		return
 	}
@@ -459,8 +499,12 @@ func (a *Agent) endEpisode(location string, reason string) {
 		return
 	}
 
+	a.stateMux.Lock()
 	delete(a.activeEpisodes, location)
-	a.logger.Info("Episode ended", "location", location, "id", id)
+	a.lastEpisodeEndTime[location] = now
+	a.stateMux.Unlock()
+
+	a.logger.Info("Episode ended", "location", location, "id", id, "ended_at", now.Format(time.RFC3339))
 
 	// Publish event
 	a.publishEpisodeEvent("closed", map[string]interface{}{
@@ -475,11 +519,177 @@ func (a *Agent) publishEpisodeEvent(eventType string, data map[string]interface{
 	a.mqtt.Publish(topic, 0, false, payload)
 }
 
+// createEpisodesFromRedis creates episodes by analyzing occupancy data in Redis
+func (a *Agent) createEpisodesFromRedis(ctx context.Context, sinceTime time.Time, location string) (int, error) {
+	// Use real time for Redis queries since predictions are stored with wall-clock time
+	// Virtual time is only used for episode timestamps
+	now := time.Now()
+	virtualNow := a.timeManager.Now()
+
+	// Get all locations to process
+	locations := []string{"bedroom", "bathroom", "kitchen", "dining_room", "hallway", "study", "living_room"}
+	if location != "" && location != "universe" {
+		locations = []string{location}
+	}
+
+	episodesCreated := 0
+
+	for _, loc := range locations {
+		// Query Redis for occupancy predictions (stored as a list)
+		key := fmt.Sprintf("predictions:%s", loc)
+
+		a.logger.Debug("Querying Redis for occupancy predictions",
+			"location", loc,
+			"key", key,
+			"since", sinceTime.Format(time.RFC3339),
+			"now", now.Format(time.RFC3339))
+
+		// Get all predictions from the list
+		predictions, err := a.redis.LRange(ctx, key, 0, -1)
+		if err != nil {
+			a.logger.Warn("Failed to query Redis for predictions",
+				"location", loc,
+				"error", err)
+			continue
+		}
+
+		if len(predictions) == 0 {
+			a.logger.Debug("No prediction data found in Redis",
+				"location", loc)
+			continue
+		}
+
+		a.logger.Debug("Found prediction events in Redis",
+			"location", loc,
+			"count", len(predictions))
+
+		// Parse predictions and detect transitions
+		// Note: predictions are stored newest first, so we need to reverse
+		var lastState string
+		var episodeStart *time.Time
+
+		// Process in chronological order (reverse the list)
+		for i := len(predictions) - 1; i >= 0; i-- {
+			var predData struct {
+				Timestamp  string  `json:"timestamp"`
+				Occupied   bool    `json:"occupied"`
+				Confidence float64 `json:"confidence"`
+			}
+
+			if err := json.Unmarshal([]byte(predictions[i]), &predData); err != nil {
+				a.logger.Warn("Failed to parse prediction data", "error", err)
+				continue
+			}
+
+			eventTime, err := time.Parse(time.RFC3339, predData.Timestamp)
+			if err != nil {
+				a.logger.Warn("Failed to parse timestamp", "error", err, "timestamp", predData.Timestamp)
+				continue
+			}
+
+			// NOTE: For test scenarios, we process ALL predictions regardless of timestamp
+			// because predictions use wall-clock time while scenarios use virtual time.
+			// In production, we'd want to filter by time window.
+			// TODO: Make occupancy agent use virtual time in test mode
+
+			// Get state
+			var currentState string
+			if predData.Occupied {
+				currentState = "occupied"
+			} else {
+				currentState = "empty"
+			}
+
+			// Detect transition to occupied (start episode)
+			if lastState != "occupied" && currentState == "occupied" {
+				episodeStart = &eventTime
+				a.logger.Debug("Detected episode start",
+					"location", loc,
+					"time", eventTime.Format(time.RFC3339))
+			}
+
+			// Detect transition to empty (end episode)
+			if lastState == "occupied" && currentState == "empty" && episodeStart != nil {
+				// Create episode in database
+				if err := a.createEpisodeInDB(ctx, loc, *episodeStart, eventTime, "occupancy_transition"); err != nil {
+					a.logger.Error("Failed to create episode in DB",
+						"location", loc,
+						"error", err)
+				} else {
+					episodesCreated++
+					a.logger.Info("Episode created from Redis data",
+						"location", loc,
+						"start", episodeStart.Format(time.RFC3339),
+						"end", eventTime.Format(time.RFC3339))
+				}
+				episodeStart = nil
+			}
+
+			lastState = currentState
+		}
+
+		// Handle unclosed episode (still occupied at end of window)
+		if episodeStart != nil {
+			if err := a.createEpisodeInDB(ctx, loc, *episodeStart, virtualNow, "occupancy_transition"); err != nil {
+				a.logger.Error("Failed to create unclosed episode in DB",
+					"location", loc,
+					"error", err)
+			} else {
+				episodesCreated++
+				a.logger.Info("Unclosed episode created from Redis data",
+					"location", loc,
+					"start", episodeStart.Format(time.RFC3339),
+					"end", "ongoing")
+			}
+		}
+	}
+
+	return episodesCreated, nil
+}
+
+// createEpisodeInDB inserts an episode directly into the database
+func (a *Agent) createEpisodeInDB(ctx context.Context, location string, startTime, endTime time.Time, triggerType string) error {
+	episode := ontology.NewEpisode(
+		ontology.Activity{
+			Type: "adl:Present",
+			Name: "Present",
+		},
+		ontology.Location{
+			Type: "saref:Room",
+			ID:   fmt.Sprintf("urn:room:%s", location),
+			Name: location,
+		},
+	)
+
+	episode.StartedAt = startTime
+
+	// Build JSON-LD with both start and end times
+	episodeJSON, _ := json.Marshal(episode)
+	var episodeMap map[string]interface{}
+	json.Unmarshal(episodeJSON, &episodeMap)
+	episodeMap["jeeves:triggerType"] = triggerType
+	episodeMap["jeeves:endedAt"] = endTime.Format(time.RFC3339)
+	jsonld, _ := json.Marshal(episodeMap)
+
+	_, err := a.pgClient.Exec(ctx,
+		"INSERT INTO behavioral_episodes (jsonld) VALUES ($1)",
+		jsonld,
+	)
+
+	return err
+}
+
 func (a *Agent) performConsolidation(ctx context.Context, sinceTime time.Time, location string) error {
 	a.logger.Info("=== CONSOLIDATION ORCHESTRATION START ===",
 		"since", sinceTime.Format(time.RFC3339),
 		"location", location,
 		"virtual_time", a.timeManager.Now().Format(time.RFC3339))
+
+	// STEP 0: Create episodes from Redis occupancy data
+	// NOTE: This is temporarily disabled - episode creation from predictions needs more work
+	// TODO: Re-enable once occupancy agent uses virtual time in tests
+	a.logger.Info("--- PHASE 0: EPISODE CREATION FROM REDIS (SKIPPED) ---")
+	a.logger.Warn("Episode creation from Redis is temporarily disabled - episodes should be created in real-time or via different mechanism")
 
 	// STEP 1: Get unconsolidated episodes from database
 	episodes, err := a.getUnconsolidatedEpisodes(ctx, sinceTime, location)
@@ -681,18 +891,113 @@ func (a *Agent) performConsolidation(ctx context.Context, sinceTime time.Time, l
 	return nil
 }
 
-// extractLocation extracts location from MQTT topic
-func extractLocation(topic string) string {
-	parts := strings.Split(topic, "/")
-	if len(parts) >= 4 {
-		return parts[3]
+func (a *Agent) handleLightingMessage(msg mqtt.Message) {
+	// Extract location from topic
+	parts := strings.Split(msg.Topic(), "/")
+	if len(parts) < 4 {
+		a.logger.Error("Invalid lighting topic format", "topic", msg.Topic())
+		return
 	}
-	return ""
+	location := parts[3]
+
+	// Parse lighting data
+	var lightData struct {
+		State      string  `json:"state"`      // "on" | "off"
+		Brightness *int    `json:"brightness"` // 0-100
+		ColorTemp  *int    `json:"color_temp"` // Kelvin
+		Source     string  `json:"source"`     // "manual" | "automated"
+		Timestamp  *string `json:"timestamp"`
+	}
+
+	if err := json.Unmarshal(msg.Payload(), &lightData); err != nil {
+		a.logger.Warn("Failed to parse lighting message",
+			"topic", msg.Topic(),
+			"payload", string(msg.Payload()),
+			"error", err)
+		return
+	}
+
+	a.logger.Debug("Lighting message received",
+		"location", location,
+		"state", lightData.State,
+		"source", lightData.Source,
+		"brightness", lightData.Brightness)
+
+	// Only process manual lighting events for episode creation
+	if lightData.Source != "manual" {
+		a.logger.Debug("Ignoring automated lighting event", "location", location)
+		return
+	}
+
+	// Track light state transitions
+	a.stateMux.Lock()
+	previousState := a.lastLightState[location]
+	currentState := lightData.State
+	a.lastLightState[location] = currentState
+	_, hasActiveEpisode := a.activeEpisodes[location]
+	a.stateMux.Unlock()
+
+	a.logger.Debug("Light state transition",
+		"location", location,
+		"previous", previousState,
+		"current", currentState,
+		"has_active_episode", hasActiveEpisode)
+
+	// Handle light turned ON manually
+	if previousState != "on" && currentState == "on" {
+		// Only create episode if no active episode exists
+		if !hasActiveEpisode {
+			a.logger.Info("Creating light-based episode",
+				"location", location,
+				"brightness", lightData.Brightness,
+				"color_temp", lightData.ColorTemp)
+			a.startEpisode(location, "manual_lighting")
+		} else {
+			a.logger.Debug("Light turned on, but episode already active",
+				"location", location)
+		}
+	}
+
+	// Handle light turned OFF manually
+	if previousState == "on" && currentState == "off" {
+		if hasActiveEpisode {
+			// For light-based episodes, schedule delayed closure (more patient than motion)
+			// Check if this episode was created by lighting
+			go a.scheduleLightBasedClosure(location, 5*time.Minute)
+		}
+	}
 }
 
-// Stubs for other handlers (implement in later iterations)
-func (a *Agent) handleLightingMessage(msg mqtt.Message) {
-	// TODO: Track manual adjustments
+// scheduleLightBasedClosure schedules delayed closure for light-based episodes
+func (a *Agent) scheduleLightBasedClosure(location string, delay time.Duration) {
+	a.logger.Debug("Scheduling light-based episode closure",
+		"location", location,
+		"delay", delay)
+
+	time.Sleep(delay)
+
+	// Check if episode should still be closed
+	a.stateMux.RLock()
+	_, exists := a.activeEpisodes[location]
+	currentLightState := a.lastLightState[location]
+	a.stateMux.RUnlock()
+
+	if !exists {
+		a.logger.Debug("Episode already closed during delay",
+			"location", location)
+		return // Episode already closed
+	}
+
+	// If light is still off after delay period, close the episode
+	if currentLightState == "off" {
+		a.logger.Info("Closing light-based episode after delay",
+			"location", location,
+			"delay_was", delay)
+		a.endEpisode(location, "lighting_off_delay")
+	} else {
+		a.logger.Debug("Light turned back on during delay, keeping episode open",
+			"location", location)
+	}
 }
 
 func (a *Agent) handleMediaMessage(msg mqtt.Message) {
