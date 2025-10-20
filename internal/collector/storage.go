@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/saaga0h/jeeves-platform/pkg/config"
+	"github.com/saaga0h/jeeves-platform/pkg/mqtt"
 	"github.com/saaga0h/jeeves-platform/pkg/redis"
 )
 
@@ -23,15 +24,17 @@ const (
 // Storage handles Redis storage operations for sensor data
 type Storage struct {
 	redis            redis.Client
+	mqtt             mqtt.Client
 	maxSensorHistory int
 	logger           *slog.Logger
 	timeManager      *TimeManager
 }
 
 // NewStorage creates a new storage handler
-func NewStorage(redisClient redis.Client, cfg *config.Config, logger *slog.Logger, timeManager *TimeManager) *Storage {
+func NewStorage(redisClient redis.Client, mqttClient mqtt.Client, cfg *config.Config, logger *slog.Logger, timeManager *TimeManager) *Storage {
 	return &Storage{
 		redis:            redisClient,
+		mqtt:             mqttClient,
 		maxSensorHistory: cfg.MaxSensorHistory,
 		logger:           logger,
 		timeManager:      timeManager,
@@ -76,6 +79,15 @@ func (s *Storage) storeMotionData(ctx context.Context, msg *SensorMessage, proce
 	score := float64(msg.CollectedAt)
 	if err := s.redis.ZAdd(ctx, key, score, jsonData); err != nil {
 		return fmt.Errorf("failed to add motion data to sorted set: %w", err)
+	}
+
+	// Publish to automation/sensor/motion/{location} as trigger
+	topic := fmt.Sprintf("automation/sensor/motion/%s", msg.Location)
+	if err := s.mqtt.Publish(topic, 0, false, jsonData); err != nil {
+		s.logger.Warn("Failed to publish motion sensor trigger",
+			"topic", topic,
+			"error", err)
+		// Don't fail the whole operation if publish fails
 	}
 
 	// Update metadata if motion detected (state == "on")
@@ -203,6 +215,15 @@ func (s *Storage) storeMediaData(ctx context.Context, msg *SensorMessage, proces
 		return fmt.Errorf("failed to add media data to sorted set: %w", err)
 	}
 
+	// Publish to automation/sensor/media/{location} as trigger
+	topic := fmt.Sprintf("automation/sensor/media/%s", msg.Location)
+	if err := s.mqtt.Publish(topic, 0, false, jsonData); err != nil {
+		s.logger.Warn("Failed to publish media sensor trigger",
+			"topic", topic,
+			"error", err)
+		// Don't fail the whole operation if publish fails
+	}
+
 	// Clean old entries (older than 24 hours)
 	maxAgeTimestamp := msg.CollectedAt - maxAge
 	if err := s.redis.ZRemRangeByScore(ctx, key, "-inf", strconv.FormatInt(maxAgeTimestamp, 10)); err != nil {
@@ -272,6 +293,15 @@ func (s *Storage) storeLightingData(ctx context.Context, msg *SensorMessage, pro
 	score := float64(collectedAt)
 	if err := s.redis.ZAdd(ctx, key, score, jsonData); err != nil {
 		return fmt.Errorf("failed to add lighting data to sorted set: %w", err)
+	}
+
+	// Publish to automation/sensor/lighting/{location} as trigger
+	topic := fmt.Sprintf("automation/sensor/lighting/%s", msg.Location)
+	if err := s.mqtt.Publish(topic, 0, false, jsonData); err != nil {
+		s.logger.Warn("Failed to publish lighting sensor trigger",
+			"topic", topic,
+			"error", err)
+		// Don't fail the whole operation if publish fails
 	}
 
 	// Clean old entries (older than 24 hours)

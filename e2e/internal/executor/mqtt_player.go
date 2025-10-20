@@ -133,6 +133,31 @@ func (p *MQTTPlayer) PublishContextEvent(eventType, location string, data map[st
 	return nil
 }
 
+// PublishLightingEvent publishes lighting events as raw sensor data
+func (p *MQTTPlayer) PublishLightingEvent(location string, data map[string]interface{}) error {
+	// Lighting events are raw sensors that collector processes: automation/raw/lighting/{location}
+	topic := fmt.Sprintf("automation/raw/lighting/%s", location)
+
+	// Wrap in the expected raw sensor format (matching collector expectations)
+	payload := map[string]interface{}{
+		"data": data,
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	token := p.client.Publish(topic, 1, false, payloadBytes)
+	token.Wait()
+	if token.Error() != nil {
+		return fmt.Errorf("failed to publish to %s: %w", topic, token.Error())
+	}
+
+	p.logger.Printf("Published lighting event to %s: %s", topic, string(payloadBytes))
+	return nil
+}
+
 // PublishMediaEvent publishes media events as raw sensor data
 func (p *MQTTPlayer) PublishMediaEvent(location string, data map[string]interface{}) error {
 	// Media events are raw sensors that collector processes: automation/raw/media/{location}

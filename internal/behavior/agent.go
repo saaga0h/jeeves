@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -61,24 +62,13 @@ func (a *Agent) Start(ctx context.Context) error {
 		// Not fatal - continue without test mode support
 	}
 
-	// Subscribe to context topics
-	topics := []string{
-		"automation/context/occupancy/+",
-		"automation/context/lighting/+",
-	}
-
-	for _, topic := range topics {
-		if err := a.mqtt.Subscribe(topic, 0, a.handleMessage); err != nil {
-			return fmt.Errorf("failed to subscribe to %s: %w", topic, err)
-		}
-	}
-
-	// NEW: Subscribe to manual consolidation trigger
+	// Subscribe ONLY to consolidation trigger (no real-time episode creation)
 	if err := a.mqtt.Subscribe("automation/behavior/consolidate", 0, a.handleConsolidationTrigger); err != nil {
-		a.logger.Warn("Failed to subscribe to consolidation trigger", "error", err)
+		return fmt.Errorf("failed to subscribe to consolidation trigger: %w", err)
 	}
 
-	a.logger.Info("Subscribed to topics", "topics", topics)
+	a.logger.Info("Behavior agent subscribed to consolidation trigger only",
+		"note", "Episodes will be created during consolidation from Redis sensor data")
 
 	// go a.runConsolidationJob(ctx)
 
@@ -519,11 +509,9 @@ func (a *Agent) publishEpisodeEvent(eventType string, data map[string]interface{
 	a.mqtt.Publish(topic, 0, false, payload)
 }
 
-// createEpisodesFromRedis creates episodes by analyzing occupancy data in Redis
-func (a *Agent) createEpisodesFromRedis(ctx context.Context, sinceTime time.Time, location string) (int, error) {
-	// Use real time for Redis queries since predictions are stored with wall-clock time
-	// Virtual time is only used for episode timestamps
-	now := time.Now()
+// createEpisodesFromSensors creates episodes by analyzing sensor data in Redis
+// Uses location transitions (motion/presence) to detect episode boundaries
+func (a *Agent) createEpisodesFromSensors(ctx context.Context, sinceTime time.Time, location string) (int, error) {
 	virtualNow := a.timeManager.Now()
 
 	// Get all locations to process
@@ -532,115 +520,206 @@ func (a *Agent) createEpisodesFromRedis(ctx context.Context, sinceTime time.Time
 		locations = []string{location}
 	}
 
+	// Collect all motion/presence events across all locations
+	type Event struct {
+		Location  string
+		Timestamp time.Time
+		Type      string // "motion", "presence", "lighting"
+		State     string // "on"/"off" for motion, "occupied"/"empty" for presence
+		Source    string // "manual"/"automated" for lighting events
+	}
+
+	var allEvents []Event
+
+	// Gather motion sensor events from all locations
+	for _, loc := range locations {
+		key := fmt.Sprintf("sensor:motion:%s", loc)
+
+		// Query Redis for motion events in the time range
+		// Collector now stores virtual timestamps (from timeManager.Now().UnixMilli())
+		// so this query will correctly filter by virtual time in test scenarios
+		minScore := float64(sinceTime.UnixMilli())
+		maxScore := float64(virtualNow.UnixMilli())
+
+		members, err := a.redis.ZRangeByScoreWithScores(ctx, key, minScore, maxScore)
+		if err != nil {
+			a.logger.Debug("No motion data for location", "location", loc, "error", err)
+			continue
+		}
+
+		a.logger.Debug("Retrieved motion data from Redis",
+			"location", loc,
+			"count", len(members),
+			"time_range", fmt.Sprintf("%s to %s", sinceTime.Format("15:04:05"), virtualNow.Format("15:04:05")))
+
+		for _, member := range members {
+			var motionData struct {
+				Timestamp string `json:"timestamp"`
+				State     string `json:"state"`
+			}
+			if err := json.Unmarshal([]byte(member.Member), &motionData); err != nil {
+				continue
+			}
+
+			ts, _ := time.Parse(time.RFC3339, motionData.Timestamp)
+			allEvents = append(allEvents, Event{
+				Location:  loc,
+				Timestamp: ts,
+				Type:      "motion",
+				State:     motionData.State,
+			})
+		}
+	}
+
+	// TODO: Add presence sensor events when available
+
+	// Gather lighting sensor events from all locations
+	// Lighting events help detect occupancy in rooms without motion sensors (e.g., dining room)
+	for _, loc := range locations {
+		key := fmt.Sprintf("sensor:lighting:%s", loc)
+
+		minScore := float64(sinceTime.UnixMilli())
+		maxScore := float64(virtualNow.UnixMilli())
+
+		members, err := a.redis.ZRangeByScoreWithScores(ctx, key, minScore, maxScore)
+		if err != nil {
+			a.logger.Debug("No lighting data for location", "location", loc, "error", err)
+			continue
+		}
+
+		a.logger.Debug("Retrieved lighting data from Redis",
+			"location", loc,
+			"count", len(members),
+			"time_range", fmt.Sprintf("%s to %s", sinceTime.Format("15:04:05"), virtualNow.Format("15:04:05")))
+
+		for _, member := range members {
+			var lightingData struct {
+				Timestamp string `json:"timestamp"`
+				State     string `json:"state"`
+				Source    string `json:"source"`
+			}
+			if err := json.Unmarshal([]byte(member.Member), &lightingData); err != nil {
+				continue
+			}
+
+			ts, _ := time.Parse(time.RFC3339, lightingData.Timestamp)
+			allEvents = append(allEvents, Event{
+				Location:  loc,
+				Timestamp: ts,
+				Type:      "lighting",
+				State:     lightingData.State,
+				Source:    lightingData.Source,
+			})
+		}
+	}
+
+	// Sort all events by timestamp
+	sort.Slice(allEvents, func(i, j int) bool {
+		return allEvents[i].Timestamp.Before(allEvents[j].Timestamp)
+	})
+
+	// Detect episodes using location transitions AND temporal gaps
+	// Key insights:
+	// 1. Motion in new location ENDS previous episode and STARTS new one
+	// 2. Large gap (>5min) in same location also ends episode and starts new one
+	const maxGapMinutes = 5
+	var currentLocation string
+	var episodeStart time.Time
+	var lastEventTime time.Time
 	episodesCreated := 0
 
-	for _, loc := range locations {
-		// Query Redis for occupancy predictions (stored as a list)
-		key := fmt.Sprintf("predictions:%s", loc)
+	for _, event := range allEvents {
+		// Process motion ON and lighting ON events (episode starts)
+		if (event.Type == "motion" && event.State == "on") || (event.Type == "lighting" && event.State == "on") {
+			// Check if we need to close current episode
+			shouldCloseEpisode := false
+			closeReason := ""
+			var episodeEndTime time.Time
 
-		a.logger.Debug("Querying Redis for occupancy predictions",
-			"location", loc,
-			"key", key,
-			"since", sinceTime.Format(time.RFC3339),
-			"now", now.Format(time.RFC3339))
-
-		// Get all predictions from the list
-		predictions, err := a.redis.LRange(ctx, key, 0, -1)
-		if err != nil {
-			a.logger.Warn("Failed to query Redis for predictions",
-				"location", loc,
-				"error", err)
-			continue
-		}
-
-		if len(predictions) == 0 {
-			a.logger.Debug("No prediction data found in Redis",
-				"location", loc)
-			continue
-		}
-
-		a.logger.Debug("Found prediction events in Redis",
-			"location", loc,
-			"count", len(predictions))
-
-		// Parse predictions and detect transitions
-		// Note: predictions are stored newest first, so we need to reverse
-		var lastState string
-		var episodeStart *time.Time
-
-		// Process in chronological order (reverse the list)
-		for i := len(predictions) - 1; i >= 0; i-- {
-			var predData struct {
-				Timestamp  string  `json:"timestamp"`
-				Occupied   bool    `json:"occupied"`
-				Confidence float64 `json:"confidence"`
+			if currentLocation != "" {
+				if currentLocation != event.Location {
+					// Location transition - close previous episode
+					// End time is when new location activity detected (person has moved)
+					shouldCloseEpisode = true
+					closeReason = fmt.Sprintf("%s_transition", event.Type)
+					episodeEndTime = event.Timestamp
+				} else {
+					// Same location - check for temporal gap
+					gap := event.Timestamp.Sub(lastEventTime)
+					if gap > maxGapMinutes*time.Minute {
+						// Temporal gap - end at last event before gap
+						shouldCloseEpisode = true
+						closeReason = "temporal_gap"
+						episodeEndTime = lastEventTime
+						a.logger.Debug("Temporal gap detected in same location",
+							"location", currentLocation,
+							"gap_minutes", int(gap.Minutes()),
+							"previous_event", lastEventTime.Format("15:04:05"),
+							"current_event", event.Timestamp.Format("15:04:05"))
+					}
+				}
 			}
 
-			if err := json.Unmarshal([]byte(predictions[i]), &predData); err != nil {
-				a.logger.Warn("Failed to parse prediction data", "error", err)
-				continue
-			}
-
-			eventTime, err := time.Parse(time.RFC3339, predData.Timestamp)
-			if err != nil {
-				a.logger.Warn("Failed to parse timestamp", "error", err, "timestamp", predData.Timestamp)
-				continue
-			}
-
-			// NOTE: For test scenarios, we process ALL predictions regardless of timestamp
-			// because predictions use wall-clock time while scenarios use virtual time.
-			// In production, we'd want to filter by time window.
-			// TODO: Make occupancy agent use virtual time in test mode
-
-			// Get state
-			var currentState string
-			if predData.Occupied {
-				currentState = "occupied"
-			} else {
-				currentState = "empty"
-			}
-
-			// Detect transition to occupied (start episode)
-			if lastState != "occupied" && currentState == "occupied" {
-				episodeStart = &eventTime
-				a.logger.Debug("Detected episode start",
-					"location", loc,
-					"time", eventTime.Format(time.RFC3339))
-			}
-
-			// Detect transition to empty (end episode)
-			if lastState == "occupied" && currentState == "empty" && episodeStart != nil {
-				// Create episode in database
-				if err := a.createEpisodeInDB(ctx, loc, *episodeStart, eventTime, "occupancy_transition"); err != nil {
-					a.logger.Error("Failed to create episode in DB",
-						"location", loc,
+			// Close previous episode if needed
+			if shouldCloseEpisode {
+				if err := a.createEpisodeInDB(ctx, currentLocation, episodeStart, episodeEndTime, closeReason); err != nil {
+					a.logger.Error("Failed to create episode",
+						"location", currentLocation,
 						"error", err)
 				} else {
 					episodesCreated++
-					a.logger.Info("Episode created from Redis data",
-						"location", loc,
+					a.logger.Info("Episode created",
+						"location", currentLocation,
 						"start", episodeStart.Format(time.RFC3339),
-						"end", eventTime.Format(time.RFC3339))
+						"end", episodeEndTime.Format(time.RFC3339),
+						"duration_min", int(episodeEndTime.Sub(episodeStart).Minutes()),
+						"reason", closeReason)
 				}
-				episodeStart = nil
 			}
 
-			lastState = currentState
+			// Start new episode if transitioning or after gap
+			if currentLocation == "" || shouldCloseEpisode {
+				currentLocation = event.Location
+				episodeStart = event.Timestamp
+			}
+
+			lastEventTime = event.Timestamp
+		} else if event.Type == "lighting" && event.State == "off" && event.Source == "manual" {
+			// Manual lighting OFF - explicit episode end for current location
+			// Automated lighting OFF events are ignored (status updates, not occupancy changes)
+			if currentLocation == event.Location {
+				if err := a.createEpisodeInDB(ctx, currentLocation, episodeStart, event.Timestamp, "lighting_off"); err != nil {
+					a.logger.Error("Failed to create episode from lighting off",
+						"location", currentLocation,
+						"error", err)
+				} else {
+					episodesCreated++
+					a.logger.Info("Episode created from manual lighting off",
+						"location", currentLocation,
+						"start", episodeStart.Format(time.RFC3339),
+						"end", event.Timestamp.Format(time.RFC3339),
+						"duration_min", int(event.Timestamp.Sub(episodeStart).Minutes()),
+						"source", event.Source)
+				}
+				// Clear current location since episode ended
+				currentLocation = ""
+				episodeStart = time.Time{}
+			}
 		}
+	}
 
-		// Handle unclosed episode (still occupied at end of window)
-		if episodeStart != nil {
-			if err := a.createEpisodeInDB(ctx, loc, *episodeStart, virtualNow, "occupancy_transition"); err != nil {
-				a.logger.Error("Failed to create unclosed episode in DB",
-					"location", loc,
-					"error", err)
-			} else {
-				episodesCreated++
-				a.logger.Info("Unclosed episode created from Redis data",
-					"location", loc,
-					"start", episodeStart.Format(time.RFC3339),
-					"end", "ongoing")
-			}
+	// Close final episode if exists
+	if currentLocation != "" {
+		if err := a.createEpisodeInDB(ctx, currentLocation, episodeStart, virtualNow, "motion_transition"); err != nil {
+			a.logger.Error("Failed to create final episode",
+				"location", currentLocation,
+				"error", err)
+		} else {
+			episodesCreated++
+			a.logger.Info("Final episode created",
+				"location", currentLocation,
+				"start", episodeStart.Format(time.RFC3339),
+				"end", virtualNow.Format(time.RFC3339))
 		}
 	}
 
@@ -685,11 +764,17 @@ func (a *Agent) performConsolidation(ctx context.Context, sinceTime time.Time, l
 		"location", location,
 		"virtual_time", a.timeManager.Now().Format(time.RFC3339))
 
-	// STEP 0: Create episodes from Redis occupancy data
-	// NOTE: This is temporarily disabled - episode creation from predictions needs more work
-	// TODO: Re-enable once occupancy agent uses virtual time in tests
-	a.logger.Info("--- PHASE 0: EPISODE CREATION FROM REDIS (SKIPPED) ---")
-	a.logger.Warn("Episode creation from Redis is temporarily disabled - episodes should be created in real-time or via different mechanism")
+	// STEP 0: Create episodes from Redis sensor data
+	a.logger.Info("--- PHASE 0: EPISODE CREATION FROM SENSORS ---")
+	episodesCreated, err := a.createEpisodesFromSensors(ctx, sinceTime, location)
+	if err != nil {
+		a.logger.Error("Failed to create episodes from sensors", "error", err)
+		// Continue anyway - work with existing episodes
+	} else {
+		a.logger.Info("Episodes created from sensor data",
+			"count", episodesCreated,
+			"since", sinceTime.Format(time.RFC3339))
+	}
 
 	// STEP 1: Get unconsolidated episodes from database
 	episodes, err := a.getUnconsolidatedEpisodes(ctx, sinceTime, location)

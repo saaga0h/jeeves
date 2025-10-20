@@ -105,6 +105,8 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (*scenario.TestR
 		switch event.Category() {
 		case "sensor":
 			err = r.player.PublishEvent(event)
+		case "lighting":
+			err = r.player.PublishLightingEvent(event.Location, event.Data)
 		case "context":
 			err = r.player.PublishContextEvent(event.Type, event.Location, event.Data)
 		case "media":

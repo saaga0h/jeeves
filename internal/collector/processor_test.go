@@ -9,7 +9,8 @@ import (
 
 func TestParseMessage(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
-	processor := NewProcessor(logger)
+	timeManager := NewTimeManager(logger)
+	processor := NewProcessor(logger, timeManager)
 
 	tests := []struct {
 		name        string
@@ -100,7 +101,8 @@ func TestParseMessage(t *testing.T) {
 
 func TestBuildMotionData(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
-	processor := NewProcessor(logger)
+	timeManager := NewTimeManager(logger)
+	processor := NewProcessor(logger, timeManager)
 
 	tests := []struct {
 		name        string
@@ -162,7 +164,8 @@ func TestBuildMotionData(t *testing.T) {
 
 func TestBuildEnvironmentalData(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
-	processor := NewProcessor(logger)
+	timeManager := NewTimeManager(logger)
+	processor := NewProcessor(logger, timeManager)
 
 	tests := []struct {
 		name        string
@@ -220,7 +223,8 @@ func TestBuildEnvironmentalData(t *testing.T) {
 
 func TestBuildTriggerPayload(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
-	processor := NewProcessor(logger)
+	timeManager := NewTimeManager(logger)
+	processor := NewProcessor(logger, timeManager)
 
 	payload := `{"data":{"state":"on"}}`
 	msg, err := processor.ParseMessage("automation/raw/motion/study", []byte(payload))

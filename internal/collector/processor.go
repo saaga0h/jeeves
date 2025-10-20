@@ -10,13 +10,15 @@ import (
 
 // Processor handles parsing and processing of sensor messages
 type Processor struct {
-	logger *slog.Logger
+	logger      *slog.Logger
+	timeManager *TimeManager
 }
 
 // NewProcessor creates a new message processor
-func NewProcessor(logger *slog.Logger) *Processor {
+func NewProcessor(logger *slog.Logger, timeManager *TimeManager) *Processor {
 	return &Processor{
-		logger: logger,
+		logger:      logger,
+		timeManager: timeManager,
 	}
 }
 
@@ -86,13 +88,17 @@ func (p *Processor) ParseMessage(topic string, payload []byte) (*SensorMessage, 
 		data = rawData
 	}
 
+	// IMPORTANT: Use virtual time from timeManager for test compatibility
+	// This ensures sorted set scores and timestamps reflect virtual time in test scenarios
+	now := p.timeManager.Now()
+
 	msg := &SensorMessage{
 		SensorType:    sensorType,
 		Location:      location,
 		OriginalTopic: topic,
 		Data:          data,
-		Timestamp:     time.Now().UTC(),
-		CollectedAt:   time.Now().UnixMilli(),
+		Timestamp:     now.UTC(),
+		CollectedAt:   now.UnixMilli(),
 	}
 
 	p.logger.Debug("Parsed sensor message",

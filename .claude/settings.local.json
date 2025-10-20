@@ -13,7 +13,10 @@
       "Bash(find:*)",
       "Bash(docker logs:*)",
       "Bash(cat:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(docker-compose build:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(docker-compose:*)"
     ],
     "deny": [],
     "ask": []

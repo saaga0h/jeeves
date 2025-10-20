@@ -26,8 +26,8 @@ type Agent struct {
 func NewAgent(mqttClient mqtt.Client, redisClient redis.Client, cfg *config.Config, logger *slog.Logger) *Agent {
 	timeManager := NewTimeManager(logger)
 
-	processor := NewProcessor(logger)
-	storage := NewStorage(redisClient, cfg, logger, timeManager)
+	processor := NewProcessor(logger, timeManager)
+	storage := NewStorage(redisClient, mqttClient, cfg, logger, timeManager)
 
 	return &Agent{
 		mqtt:        mqttClient,

@@ -41,13 +41,16 @@ func (e *SensorEvent) Category() string {
 	if e.Sensor != "" {
 		return "sensor" // Raw sensor event
 	}
+	if e.Type == "lighting" {
+		return "lighting" // Lighting events should go through collector as raw sensors
+	}
 	if e.Type == "media" {
 		return "media"
 	}
 	if e.Type == "behavior" {
-		return "behavior" // NEW
+		return "behavior"
 	}
-	return "context" // occupancy, lighting, etc
+	return "context" // occupancy, etc
 }
 
 // WaitPeriod represents a pause in the scenario
