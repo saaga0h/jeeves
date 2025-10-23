@@ -641,3 +641,216 @@ func (s *AnchorStorage) GetTopPatterns(ctx context.Context, limit int) ([]*types
 
 	return patterns, nil
 }
+
+// UpdateAnchorPattern updates an anchor's pattern_id reference
+func (s *AnchorStorage) UpdateAnchorPattern(ctx context.Context, anchorID, patternID uuid.UUID) error {
+	query := `
+		UPDATE semantic_anchors
+		SET pattern_id = $2
+		WHERE id = $1
+	`
+
+	_, err := s.db.ExecContext(ctx, query, anchorID, patternID)
+	if err != nil {
+		return fmt.Errorf("failed to update anchor pattern: %w", err)
+	}
+
+	return nil
+}
+
+// GetAnchorsWithDistances retrieves anchors that have computed distances
+func (s *AnchorStorage) GetAnchorsWithDistances(ctx context.Context, since time.Time) ([]*types.SemanticAnchor, error) {
+	query := `
+		SELECT DISTINCT a.id, a.timestamp, a.location, a.semantic_embedding,
+		       a.context, a.signals, a.duration_minutes, a.duration_source,
+		       a.duration_confidence, a.preceding_anchor_id, a.following_anchor_id,
+		       a.pattern_id, a.created_at
+		FROM semantic_anchors a
+		WHERE a.timestamp >= $1
+		  AND EXISTS (
+			SELECT 1 FROM anchor_distances d
+			WHERE d.anchor1_id = a.id OR d.anchor2_id = a.id
+		  )
+		ORDER BY a.timestamp ASC
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, since)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query anchors with distances: %w", err)
+	}
+	defer rows.Close()
+
+	var anchors []*types.SemanticAnchor
+
+	for rows.Next() {
+		var anchor types.SemanticAnchor
+		var contextJSON, signalsJSON []byte
+
+		err := rows.Scan(
+			&anchor.ID,
+			&anchor.Timestamp,
+			&anchor.Location,
+			&anchor.SemanticEmbedding,
+			&contextJSON,
+			&signalsJSON,
+			&anchor.DurationMinutes,
+			&anchor.DurationSource,
+			&anchor.DurationConfidence,
+			&anchor.PrecedingAnchorID,
+			&anchor.FollowingAnchorID,
+			&anchor.PatternID,
+			&anchor.CreatedAt,
+		)
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan anchor row: %w", err)
+		}
+
+		// Unmarshal JSONB fields
+		if err := json.Unmarshal(contextJSON, &anchor.Context); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal context: %w", err)
+		}
+
+		if err := json.Unmarshal(signalsJSON, &anchor.Signals); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal signals: %w", err)
+		}
+
+		anchors = append(anchors, &anchor)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating anchor rows: %w", err)
+	}
+
+	return anchors, nil
+}
+
+// GetAnchorsByIDs retrieves multiple anchors by their IDs
+func (s *AnchorStorage) GetAnchorsByIDs(ctx context.Context, ids []uuid.UUID) ([]*types.SemanticAnchor, error) {
+	if len(ids) == 0 {
+		return []*types.SemanticAnchor{}, nil
+	}
+
+	// Convert UUIDs to strings for the query
+	idStrings := make([]string, len(ids))
+	for i, id := range ids {
+		idStrings[i] = id.String()
+	}
+
+	query := `
+		SELECT id, timestamp, location, semantic_embedding,
+		       context, signals, duration_minutes, duration_source,
+		       duration_confidence, preceding_anchor_id, following_anchor_id,
+		       pattern_id, created_at
+		FROM semantic_anchors
+		WHERE id::text = ANY($1)
+		ORDER BY timestamp ASC
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, idStrings)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query anchors by IDs: %w", err)
+	}
+	defer rows.Close()
+
+	var anchors []*types.SemanticAnchor
+
+	for rows.Next() {
+		var anchor types.SemanticAnchor
+		var contextJSON, signalsJSON []byte
+
+		err := rows.Scan(
+			&anchor.ID,
+			&anchor.Timestamp,
+			&anchor.Location,
+			&anchor.SemanticEmbedding,
+			&contextJSON,
+			&signalsJSON,
+			&anchor.DurationMinutes,
+			&anchor.DurationSource,
+			&anchor.DurationConfidence,
+			&anchor.PrecedingAnchorID,
+			&anchor.FollowingAnchorID,
+			&anchor.PatternID,
+			&anchor.CreatedAt,
+		)
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan anchor row: %w", err)
+		}
+
+		// Unmarshal JSONB fields
+		if err := json.Unmarshal(contextJSON, &anchor.Context); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal context: %w", err)
+		}
+
+		if err := json.Unmarshal(signalsJSON, &anchor.Signals); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal signals: %w", err)
+		}
+
+		anchors = append(anchors, &anchor)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating anchor rows: %w", err)
+	}
+
+	return anchors, nil
+}
+
+// UpdatePatternWeight increments a pattern's weight by delta
+func (s *AnchorStorage) UpdatePatternWeight(ctx context.Context, patternID uuid.UUID, weightDelta float64) error {
+	query := `
+		UPDATE behavioral_patterns
+		SET weight = weight + $2,
+			updated_at = $3
+		WHERE id = $1
+	`
+
+	_, err := s.db.ExecContext(ctx, query, patternID, weightDelta, time.Now())
+	if err != nil {
+		return fmt.Errorf("failed to update pattern weight: %w", err)
+	}
+
+	return nil
+}
+
+// UpdatePatternObserved increments pattern observation count
+func (s *AnchorStorage) UpdatePatternObserved(ctx context.Context, patternID uuid.UUID) error {
+	query := `
+		UPDATE behavioral_patterns
+		SET observations = observations + 1,
+			last_seen = $2,
+			updated_at = $2
+		WHERE id = $1
+	`
+
+	now := time.Now()
+	_, err := s.db.ExecContext(ctx, query, patternID, now)
+	if err != nil {
+		return fmt.Errorf("failed to update pattern observed: %w", err)
+	}
+
+	return nil
+}
+
+// UpdatePatternPrediction updates pattern prediction statistics
+func (s *AnchorStorage) UpdatePatternPrediction(ctx context.Context, patternID uuid.UUID, accepted bool) error {
+	query := `
+		UPDATE behavioral_patterns
+		SET predictions = predictions + 1,
+			acceptances = CASE WHEN $2 THEN acceptances + 1 ELSE acceptances END,
+			rejections = CASE WHEN $2 THEN rejections ELSE rejections + 1 END,
+			last_useful = CASE WHEN $2 THEN $3 ELSE last_useful END,
+			updated_at = $3
+		WHERE id = $1
+	`
+
+	now := time.Now()
+	_, err := s.db.ExecContext(ctx, query, patternID, accepted, now)
+	if err != nil {
+		return fmt.Errorf("failed to update pattern prediction: %w", err)
+	}
+
+	return nil
+}

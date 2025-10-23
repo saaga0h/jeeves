@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/saaga0h/jeeves-platform/internal/behavior/anchor"
 	"github.com/saaga0h/jeeves-platform/pkg/config"
 	"github.com/saaga0h/jeeves-platform/pkg/llm"
 	"github.com/saaga0h/jeeves-platform/pkg/mqtt"
@@ -31,6 +32,18 @@ type Agent struct {
 	lastOccupancyState  map[string]string // location → "occupied" | "empty"
 	lastLightState      map[string]string // location → "on" | "off" | "unknown"
 	stateMux            sync.RWMutex
+
+	// Semantic anchor system (optional - Phase 3)
+	anchorCreator       *anchor.AnchorCreator
+}
+
+// Event represents a sensor event used for episode detection and anchor creation
+type Event struct {
+	Location  string
+	Timestamp time.Time
+	Type      string // "motion", "presence", "lighting"
+	State     string // "on"/"off" for motion, "occupied"/"empty" for presence
+	Source    string // "manual"/"automated" for lighting events
 }
 
 func NewAgent(mqttClient mqtt.Client, redisClient redis.Client, pgClient postgres.Client, cfg *config.Config, logger *slog.Logger) (*Agent, error) {
@@ -521,14 +534,6 @@ func (a *Agent) createEpisodesFromSensors(ctx context.Context, sinceTime time.Ti
 	}
 
 	// Collect all motion/presence events across all locations
-	type Event struct {
-		Location  string
-		Timestamp time.Time
-		Type      string // "motion", "presence", "lighting"
-		State     string // "on"/"off" for motion, "occupied"/"empty" for presence
-		Source    string // "manual"/"automated" for lighting events
-	}
-
 	var allEvents []Event
 
 	// Gather motion sensor events from all locations
