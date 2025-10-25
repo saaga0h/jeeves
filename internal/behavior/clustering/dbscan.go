@@ -98,11 +98,12 @@ func (e *ClusteringEngine) loadDistanceMatrix(
 	for i := 0; i < len(anchorIDs); i++ {
 		for j := i + 1; j < len(anchorIDs); j++ {
 			dist, err := e.storage.GetDistance(ctx, anchorIDs[i], anchorIDs[j])
-			if err != nil {
+			if err != nil || dist == nil {
 				// Missing distance - skip this pair
 				e.logger.Debug("Missing distance",
 					"anchor1", anchorIDs[i],
-					"anchor2", anchorIDs[j])
+					"anchor2", anchorIDs[j],
+					"error", err)
 				continue
 			}
 

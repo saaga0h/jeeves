@@ -1082,15 +1082,41 @@ func (a *Agent) performConsolidation(ctx context.Context, sinceTime time.Time, l
 			"since", sinceTime.Format(time.RFC3339))
 	}
 
-	// STEP 0.5: Create semantic anchors from episodes
+	// STEP 0.5: Create semantic anchors from episodes (OLD PATH)
 	if a.anchorCreator != nil {
-		a.logger.Info("--- PHASE 0.5: SEMANTIC ANCHOR CREATION ---")
+		a.logger.Info("--- PHASE 0.5: SEMANTIC ANCHOR CREATION (from episodes) ---")
 		anchorsCreated, err := a.createAnchorsFromEpisodes(ctx, sinceTime, location)
 		if err != nil {
 			a.logger.Error("Failed to create anchors from episodes", "error", err)
 		} else {
-			a.logger.Info("Semantic anchors created successfully",
+			a.logger.Info("Semantic anchors created from episodes",
 				"count", anchorsCreated,
+				"since", sinceTime.Format(time.RFC3339))
+		}
+	}
+
+	// STEP 0.6: Create semantic anchors directly from sensor events (NEW PATH - parallel execution)
+	if a.anchorCreator != nil {
+		a.logger.Info("--- PHASE 0.6: DIRECT ANCHOR CREATION (from sensor events) ---")
+
+		// Determine locations to process
+		locations := []string{}
+		if location != "" && location != "universe" {
+			locations = []string{location}
+		} else {
+			// Get all known locations from Redis
+			// For simplicity, use common locations - could be improved
+			locations = []string{"living_room", "kitchen", "bedroom", "bathroom", "study", "hallway"}
+		}
+
+		virtualNow := a.timeManager.Now()
+		directAnchorsCreated, err := a.createAnchorsDirectlyFromSensorEvents(ctx, sinceTime, virtualNow, locations)
+		if err != nil {
+			a.logger.Error("Failed to create anchors directly from sensor events", "error", err)
+		} else {
+			a.logger.Info("Semantic anchors created directly from sensor events",
+				"count", directAnchorsCreated,
+				"locations", locations,
 				"since", sinceTime.Format(time.RFC3339))
 		}
 	}

@@ -323,13 +323,17 @@ Consider:
 - Time of day context (morning prep vs late night)
 - Seasonal patterns (winter mornings darker, routines different)
 - Day type (weekday routine vs weekend leisure)
+- Concurrent activities: Different locations at the SAME time usually indicate SEPARATE activities (distance >= 0.5)
+- Sequential activities: Different locations with time progression often indicate RELATED flow (distance < 0.3)
 
 Rate semantic distance on scale 0.0 (same activity/pattern) to 1.0 (completely unrelated).
 
 Examples:
-- Kitchen @ 7am Monday winter + Dining @ 7:30am Monday winter = 0.15 (breakfast sequence)
+- Kitchen @ 7am Monday winter + Dining @ 7:30am Monday winter = 0.15 (breakfast sequence across locations)
 - Kitchen @ 7am Monday + Kitchen @ 2am Saturday = 0.8 (same space, very different context)
 - Bedroom @ 10pm + Bedroom @ 7am = 0.7 (same space, sleep boundary between)
+- Living_room @ 20:00 + Study @ 20:00 = 0.6 (concurrent activities in different spaces)
+- Bedroom @ 7:00 + Bathroom @ 7:15 = 0.1 (morning routine flow across locations)
 
 Respond with ONLY valid JSON (no markdown, no explanation):
 {

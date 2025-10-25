@@ -3,7 +3,9 @@ package behavior
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"time"
 
 	goredis "github.com/redis/go-redis/v9"
 
@@ -133,4 +135,204 @@ func (a *Agent) getRedisClient() *goredis.Client {
 	}
 
 	return goredis.NewClient(opts)
+}
+
+// createAnchorsDirectlyFromSensorEvents creates semantic anchors directly from sensor events
+// stored in Redis, bypassing episode consolidation. This runs in parallel with the old
+// episode-based approach to enable testing anchor-first pattern discovery.
+//
+// Anchor creation rules:
+// - Motion: Create anchor if >2 minutes since last motion anchor in same location
+// - Lighting: Always create anchor for state changes (on/off)
+// - Media: Always create anchor for state changes (play/stop)
+func (a *Agent) createAnchorsDirectlyFromSensorEvents(ctx context.Context, sinceTime time.Time, virtualNow time.Time, locations []string) (int, error) {
+	if a.anchorCreator == nil {
+		a.logger.Debug("Anchor creator not initialized, skipping direct anchor creation")
+		return 0, nil
+	}
+
+	a.logger.Info("Creating anchors directly from sensor events",
+		"since", sinceTime.Format(time.RFC3339),
+		"until", virtualNow.Format(time.RFC3339),
+		"locations", locations)
+
+	// Gather all sensor events from Redis
+	var allEvents []Event
+
+	// Gather motion sensor events
+	for _, loc := range locations {
+		key := fmt.Sprintf("sensor:motion:%s", loc)
+		minScore := float64(sinceTime.UnixMilli())
+		maxScore := float64(virtualNow.UnixMilli())
+
+		members, err := a.redis.ZRangeByScoreWithScores(ctx, key, minScore, maxScore)
+		if err != nil {
+			a.logger.Debug("No motion data for location", "location", loc, "error", err)
+			continue
+		}
+
+		for _, member := range members {
+			var motionData struct {
+				Timestamp string `json:"timestamp"`
+				State     string `json:"state"`
+			}
+			if err := json.Unmarshal([]byte(member.Member), &motionData); err != nil {
+				continue
+			}
+
+			ts, _ := time.Parse(time.RFC3339, motionData.Timestamp)
+			allEvents = append(allEvents, Event{
+				Location:  loc,
+				Timestamp: ts,
+				Type:      "motion",
+				State:     motionData.State,
+			})
+		}
+	}
+
+	// Gather lighting sensor events
+	for _, loc := range locations {
+		key := fmt.Sprintf("sensor:lighting:%s", loc)
+		minScore := float64(sinceTime.UnixMilli())
+		maxScore := float64(virtualNow.UnixMilli())
+
+		members, err := a.redis.ZRangeByScoreWithScores(ctx, key, minScore, maxScore)
+		if err != nil {
+			a.logger.Debug("No lighting data for location", "location", loc, "error", err)
+			continue
+		}
+
+		for _, member := range members {
+			var lightingData struct {
+				Timestamp string `json:"timestamp"`
+				State     string `json:"state"`
+				Source    string `json:"source"`
+			}
+			if err := json.Unmarshal([]byte(member.Member), &lightingData); err != nil {
+				continue
+			}
+
+			ts, _ := time.Parse(time.RFC3339, lightingData.Timestamp)
+			allEvents = append(allEvents, Event{
+				Location:  loc,
+				Timestamp: ts,
+				Type:      "lighting",
+				State:     lightingData.State,
+				Source:    lightingData.Source,
+			})
+		}
+	}
+
+	// Gather media sensor events
+	for _, loc := range locations {
+		key := fmt.Sprintf("sensor:media:%s", loc)
+		minScore := float64(sinceTime.UnixMilli())
+		maxScore := float64(virtualNow.UnixMilli())
+
+		members, err := a.redis.ZRangeByScoreWithScores(ctx, key, minScore, maxScore)
+		if err != nil {
+			a.logger.Debug("No media data for location", "location", loc, "error", err)
+			continue
+		}
+
+		for _, member := range members {
+			var mediaData struct {
+				Timestamp string `json:"timestamp"`
+				State     string `json:"state"`
+			}
+			if err := json.Unmarshal([]byte(member.Member), &mediaData); err != nil {
+				continue
+			}
+
+			ts, _ := time.Parse(time.RFC3339, mediaData.Timestamp)
+			allEvents = append(allEvents, Event{
+				Location:  loc,
+				Timestamp: ts,
+				Type:      "media",
+				State:     mediaData.State,
+			})
+		}
+	}
+
+	a.logger.Info("Gathered sensor events for direct anchor creation",
+		"total_events", len(allEvents))
+
+	// Sort events by timestamp
+	// Note: Using custom sort instead of sort.Slice to avoid issues
+	for i := 0; i < len(allEvents); i++ {
+		for j := i + 1; j < len(allEvents); j++ {
+			if allEvents[j].Timestamp.Before(allEvents[i].Timestamp) {
+				allEvents[i], allEvents[j] = allEvents[j], allEvents[i]
+			}
+		}
+	}
+
+	// Track last motion anchor time per location to avoid creating too many
+	lastMotionAnchor := make(map[string]time.Time)
+	minMotionGap := 2 * time.Minute // Create motion anchor only if >2 minutes since last
+
+	anchorsCreated := 0
+
+	for _, event := range allEvents {
+		shouldCreateAnchor := false
+
+		// Decide if this event should create an anchor
+		switch event.Type {
+		case "motion":
+			if event.State == "on" {
+				// Check time since last motion anchor in this location
+				lastTime, exists := lastMotionAnchor[event.Location]
+				if !exists || event.Timestamp.Sub(lastTime) > minMotionGap {
+					shouldCreateAnchor = true
+					lastMotionAnchor[event.Location] = event.Timestamp
+				}
+			}
+
+		case "lighting":
+			// Always create anchor for lighting state changes
+			shouldCreateAnchor = true
+
+		case "media":
+			// Always create anchor for media events
+			shouldCreateAnchor = true
+		}
+
+		if !shouldCreateAnchor {
+			continue
+		}
+
+		// Build signals for this anchor
+		signals := []types.ActivitySignal{
+			{
+				Type:       event.Type,
+				Confidence: 0.8,
+				Timestamp:  event.Timestamp,
+				Value:      a.buildSignalValue(event),
+			},
+		}
+
+		// Create the anchor
+		anchor, err := a.anchorCreator.CreateAnchor(ctx, event.Location, event.Timestamp, signals)
+		if err != nil {
+			a.logger.Warn("Failed to create direct anchor",
+				"location", event.Location,
+				"event_type", event.Type,
+				"timestamp", event.Timestamp.Format(time.RFC3339),
+				"error", err)
+			continue
+		}
+
+		anchorsCreated++
+		a.logger.Debug("Created direct anchor",
+			"anchor_id", anchor.ID,
+			"location", event.Location,
+			"event_type", event.Type,
+			"timestamp", event.Timestamp.Format(time.RFC3339))
+	}
+
+	a.logger.Info("Direct anchor creation completed",
+		"anchors_created", anchorsCreated,
+		"events_processed", len(allEvents))
+
+	return anchorsCreated, nil
 }
