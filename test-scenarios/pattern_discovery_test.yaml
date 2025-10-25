@@ -1,0 +1,288 @@
+name: "Pattern Discovery Test - Morning Routine"
+description: "Test semantic anchor creation and pattern discovery for morning routine behavior"
+
+test_mode:
+  virtual_start: "2025-10-21T06:00:00Z"
+  time_scale: 60  # 60x speed - 1 real second = 1 virtual minute
+
+setup:
+  location: "universe"  # Track all locations
+  initial_state:
+    pattern_discovery_enabled: true
+    pattern_distance_strategy: "llm_first"  # For testing, build learned library
+
+events:
+  # === Day 1 Morning Routine (06:00-07:00) ===
+  # Wake up in bedroom
+  - time: 0
+    sensor: "motion:bedroom"
+    value: true
+    description: "Wake up - motion in bedroom"
+
+  - time: 5
+    type: lighting
+    location: bedroom
+    data:
+      state: "on"
+      source: "manual"
+      brightness: 50
+      timestamp: "2025-10-21T06:05:00Z"
+    description: "Turn on bedroom lights"
+
+  # Move to bathroom
+  - time: 300
+    sensor: "motion:bathroom"
+    value: true
+    description: "Enter bathroom"
+
+  - time: 305
+    type: lighting
+    location: bathroom
+    data:
+      state: "on"
+      source: "automated"
+      brightness: 100
+      timestamp: "2025-10-21T06:10:05Z"
+    description: "Bathroom lights on"
+
+  # Move to kitchen
+  - time: 900
+    sensor: "motion:kitchen"
+    value: true
+    description: "Enter kitchen"
+
+  - time: 905
+    type: lighting
+    location: kitchen
+    data:
+      state: "on"
+      source: "manual"
+      brightness: 80
+      timestamp: "2025-10-21T06:20:05Z"
+    description: "Kitchen lights on"
+
+  # Breakfast activity
+  - time: 1200
+    type: media
+    location: kitchen
+    data:
+      state: "playing"
+      media_type: "audio"
+      source: "spotify"
+      timestamp: "2025-10-21T06:25:00Z"
+    description: "Play music during breakfast"
+
+  # === Day 2 Morning Routine (Same pattern, +1 day) ===
+  - time: 86400  # +24 hours
+    sensor: "motion:bedroom"
+    value: true
+    description: "Day 2: Wake up"
+
+  - time: 86405
+    type: lighting
+    location: bedroom
+    data:
+      state: "on"
+      source: "manual"
+      brightness: 50
+      timestamp: "2025-10-22T06:05:00Z"
+    description: "Day 2: Bedroom lights on"
+
+  - time: 86700
+    sensor: "motion:bathroom"
+    value: true
+    description: "Day 2: Enter bathroom"
+
+  - time: 87300
+    sensor: "motion:kitchen"
+    value: true
+    description: "Day 2: Enter kitchen"
+
+  # === Day 3 Morning Routine ===
+  - time: 172800  # +48 hours
+    sensor: "motion:bedroom"
+    value: true
+    description: "Day 3: Wake up"
+
+  - time: 172805
+    type: lighting
+    location: bedroom
+    data:
+      state: "on"
+      source: "manual"
+      brightness: 50
+      timestamp: "2025-10-23T06:05:00Z"
+    description: "Day 3: Bedroom lights on"
+
+  - time: 173100
+    sensor: "motion:bathroom"
+    value: true
+    description: "Day 3: Enter bathroom"
+
+  - time: 173700
+    sensor: "motion:kitchen"
+    value: true
+    description: "Day 3: Enter kitchen"
+
+  # === Day 4 Morning Routine ===
+  - time: 259200  # +72 hours
+    sensor: "motion:bedroom"
+    value: true
+    description: "Day 4: Wake up"
+
+  - time: 259205
+    type: lighting
+    location: bedroom
+    data:
+      state: "on"
+      source: "manual"
+      brightness: 50
+      timestamp: "2025-10-24T06:05:00Z"
+    description: "Day 4: Bedroom lights on"
+
+  - time: 259500
+    sensor: "motion:bathroom"
+    value: true
+    description: "Day 4: Enter bathroom"
+
+  - time: 260100
+    sensor: "motion:kitchen"
+    value: true
+    description: "Day 4: Enter kitchen"
+
+  # === Trigger Consolidation to Create Episodes ===
+  - time: 260400
+    type: behavior
+    location: universe
+    data:
+      action: "consolidate"
+      lookback_hours: 96  # 4 days
+    description: "Create episodes from sensor data"
+
+  # === Trigger Distance Computation ===
+  - time: 260700
+    type: behavior
+    location: universe
+    data:
+      action: "compute_distances"
+      lookback_hours: 96
+    description: "Compute semantic distances between anchors"
+
+  # === Trigger Pattern Discovery ===
+  # Wait 10 seconds (virtual time) for distance computation to complete
+  - time: 270700
+    type: behavior
+    location: universe
+    data:
+      action: "discover_patterns"
+      min_anchors: 4
+      lookback_hours: 96
+    description: "Discover patterns from clustered anchors"
+
+wait:
+  - time: 271000
+    description: "Wait for pattern discovery to complete"
+
+expectations:
+  behavior_events:
+    # Consolidation completed
+    - time: 260500
+      topic: "automation/behavior/consolidation/completed"
+      payload:
+        macro_episodes_created: ">=1"
+
+    # Distance computation completed
+    - time: 260800
+      topic: "automation/behavior/distance/completed"
+      payload:
+        distances_computed: ">=10"
+        strategy_used: "llm_first"
+
+    # Pattern discovery completed
+    - time: 261100
+      topic: "automation/behavior/patterns/discovered"
+      payload:
+        patterns_found: ">=1"
+        clusters_analyzed: ">=1"
+
+  postgres:
+    # Verify semantic anchors were created
+    - time: 261200
+      postgres_query: "SELECT COUNT(*) FROM semantic_anchors"
+      postgres_expected: ">=12"  # At least 3 anchors per day * 4 days
+      description: "Semantic anchors created for each location activity"
+
+    # Verify anchors have embeddings (pgvector returns vector dimension differently)
+    - time: 261200
+      postgres_query: |
+        SELECT COUNT(*) FROM semantic_anchors
+        WHERE vector_dims(semantic_embedding) = 128
+      postgres_expected: ">=12"
+      description: "All anchors have 128-dimensional embeddings"
+
+    # Verify distance computations stored
+    - time: 261200
+      postgres_query: "SELECT COUNT(*) FROM anchor_distances"
+      postgres_expected: ">=10"
+      description: "Distances computed and cached"
+
+    # Verify learned distance library populated
+    - time: 261200
+      postgres_query: "SELECT COUNT(*) FROM learned_distances"
+      postgres_expected: ">=5"
+      description: "Learned distance library populated from LLM computations"
+
+    # Verify patterns discovered
+    - time: 261200
+      postgres_query: "SELECT COUNT(*) FROM behavioral_patterns"
+      postgres_expected: ">=1"
+      description: "At least one pattern discovered (morning routine)"
+
+    # Verify pattern has correct initial weight
+    - time: 261200
+      postgres_query: |
+        SELECT weight FROM behavioral_patterns
+        ORDER BY created_at DESC LIMIT 1
+      postgres_expected: 0.1
+      description: "New pattern starts with weight 0.1"
+
+    # Verify pattern interpretation exists
+    - time: 261200
+      postgres_query: |
+        SELECT name FROM behavioral_patterns
+        WHERE name ILIKE '%morning%' OR name ILIKE '%routine%'
+        ORDER BY created_at DESC LIMIT 1
+      postgres_expected: "!null"
+      description: "Pattern has meaningful name (morning/routine)"
+
+    # Verify anchors linked to pattern
+    - time: 261200
+      postgres_query: |
+        SELECT COUNT(*) FROM semantic_anchors
+        WHERE pattern_id IS NOT NULL
+      postgres_expected: ">=4"
+      description: "Anchors linked to discovered pattern"
+
+    # Verify cluster metadata
+    - time: 261200
+      postgres_query: |
+        SELECT cluster_size FROM behavioral_patterns
+        ORDER BY created_at DESC LIMIT 1
+      postgres_expected: ">=4"
+      description: "Pattern cluster contains at least 4 anchors"
+
+    # Verify pattern context (time of day)
+    - time: 261200
+      postgres_query: |
+        SELECT dominant_context->>'time_of_day' FROM behavioral_patterns
+        ORDER BY created_at DESC LIMIT 1
+      postgres_expected: "morning"
+      description: "Pattern identified as morning activity"
+
+    # Verify pattern locations
+    - time: 261200
+      postgres_query: |
+        SELECT array_length(locations, 1) FROM behavioral_patterns
+        ORDER BY created_at DESC LIMIT 1
+      postgres_expected: ">=3"
+      description: "Pattern spans multiple locations (bedroom, bathroom, kitchen)"

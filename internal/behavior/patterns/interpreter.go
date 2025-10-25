@@ -18,6 +18,7 @@ import (
 type PatternInterpreter struct {
 	storage *storage.AnchorStorage
 	llm     llm.Client
+	model   string // LLM model name
 	logger  *slog.Logger
 }
 
@@ -25,11 +26,13 @@ type PatternInterpreter struct {
 func NewPatternInterpreter(
 	storage *storage.AnchorStorage,
 	llmClient llm.Client,
+	model string,
 	logger *slog.Logger,
 ) *PatternInterpreter {
 	return &PatternInterpreter{
 		storage: storage,
 		llm:     llmClient,
+		model:   model,
 		logger:  logger,
 	}
 }
@@ -55,6 +58,7 @@ func (p *PatternInterpreter) InterpretCluster(
 
 	// Ask LLM
 	req := llm.GenerateRequest{
+		Model:  p.model,
 		Prompt: prompt,
 		Format: "json", // Request JSON response
 	}

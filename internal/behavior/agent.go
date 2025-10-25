@@ -2,6 +2,7 @@ package behavior
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,11 @@ import (
 	"time"
 
 	"github.com/saaga0h/jeeves-platform/internal/behavior/anchor"
+	"github.com/saaga0h/jeeves-platform/internal/behavior/clustering"
+	"github.com/saaga0h/jeeves-platform/internal/behavior/distance"
+	"github.com/saaga0h/jeeves-platform/internal/behavior/patterns"
+	"github.com/saaga0h/jeeves-platform/internal/behavior/storage"
+	"github.com/saaga0h/jeeves-platform/internal/behavior/types"
 	"github.com/saaga0h/jeeves-platform/pkg/config"
 	"github.com/saaga0h/jeeves-platform/pkg/llm"
 	"github.com/saaga0h/jeeves-platform/pkg/mqtt"
@@ -35,6 +41,12 @@ type Agent struct {
 
 	// Semantic anchor system (optional - Phase 3)
 	anchorCreator       *anchor.AnchorCreator
+
+	// Pattern discovery system (optional - Phase 4)
+	distanceAgent       *distance.ComputationAgent
+	clusteringEngine    *clustering.ClusteringEngine
+	patternInterpreter  *patterns.PatternInterpreter
+	discoveryAgent      *patterns.DiscoveryAgent
 }
 
 // Event represents a sensor event used for episode detection and anchor creation
@@ -47,7 +59,7 @@ type Event struct {
 }
 
 func NewAgent(mqttClient mqtt.Client, redisClient redis.Client, pgClient postgres.Client, cfg *config.Config, logger *slog.Logger) (*Agent, error) {
-	return &Agent{
+	agent := &Agent{
 		mqtt:               mqttClient,
 		redis:              redisClient,
 		pgClient:           pgClient,
@@ -58,7 +70,100 @@ func NewAgent(mqttClient mqtt.Client, redisClient redis.Client, pgClient postgre
 		lastEpisodeEndTime: make(map[string]time.Time),
 		lastOccupancyState: make(map[string]string),
 		lastLightState:     make(map[string]string),
-	}, nil
+	}
+
+	// Initialize pattern discovery if enabled
+	if cfg.PatternDiscoveryEnabled {
+		// Initialize anchor creator first (required for pattern discovery)
+		if err := agent.initializeAnchorCreator(cfg); err != nil {
+			logger.Warn("Failed to initialize anchor creator", "error", err)
+		}
+
+		if err := agent.initializePatternDiscovery(); err != nil {
+			logger.Warn("Failed to initialize pattern discovery", "error", err)
+			// Not fatal - continue without pattern discovery
+		}
+	}
+
+	return agent, nil
+}
+
+// initializePatternDiscovery initializes all pattern discovery components
+func (a *Agent) initializePatternDiscovery() error {
+	a.logger.Info("Initializing pattern discovery system",
+		"strategy", a.cfg.PatternDistanceStrategy,
+		"interval_hours", a.cfg.PatternDiscoveryIntervalHours,
+		"epsilon", a.cfg.PatternClusteringEpsilon,
+		"min_points", a.cfg.PatternClusteringMinPoints)
+
+	// Get database connection for storage layer
+	db, err := a.getDBConnection()
+	if err != nil {
+		return fmt.Errorf("failed to get database connection: %w", err)
+	}
+
+	// Create storage instance (will be used by multiple components)
+	anchorStorage := a.createAnchorStorage(db)
+
+	// Create LLM client for pattern interpretation and distance computation
+	llmClient := llm.NewOllamaClient(a.cfg.LLMEndpoint, a.logger)
+
+	// Initialize distance computation agent
+	distanceConfig := distance.ComputationConfig{
+		Strategy:  a.cfg.PatternDistanceStrategy,
+		Model:     a.cfg.LLMModel,
+		BatchSize: a.cfg.PatternDiscoveryBatchSize,
+		Interval:  time.Duration(a.cfg.PatternDiscoveryIntervalHours) * time.Hour,
+	}
+	a.distanceAgent = distance.NewComputationAgent(
+		distanceConfig,
+		anchorStorage,
+		llmClient,
+		a.mqtt,
+		a.logger,
+	)
+
+	// Initialize clustering engine
+	clusteringConfig := clustering.DBSCANConfig{
+		Epsilon:   a.cfg.PatternClusteringEpsilon,
+		MinPoints: a.cfg.PatternClusteringMinPoints,
+	}
+	a.clusteringEngine = clustering.NewClusteringEngine(
+		clusteringConfig,
+		anchorStorage,
+		a.logger,
+	)
+
+	// Initialize pattern interpreter
+	a.patternInterpreter = patterns.NewPatternInterpreter(
+		anchorStorage,
+		llmClient,
+		a.cfg.LLMModel,
+		a.logger,
+	)
+
+	// Initialize pattern discovery agent
+	discoveryConfig := patterns.DiscoveryConfig{
+		MinAnchors:    a.cfg.PatternMinAnchorsForDiscovery,
+		LookbackHours: a.cfg.PatternLookbackHours,
+		Interval:      time.Duration(a.cfg.PatternDiscoveryIntervalHours) * time.Hour,
+	}
+	a.discoveryAgent = patterns.NewDiscoveryAgent(
+		discoveryConfig,
+		anchorStorage,
+		a.clusteringEngine,
+		a.patternInterpreter,
+		a.mqtt,
+		a.logger,
+	)
+
+	a.logger.Info("Pattern discovery system initialized successfully")
+	return nil
+}
+
+// createAnchorStorage creates a new AnchorStorage instance from a database connection
+func (a *Agent) createAnchorStorage(db *sql.DB) *storage.AnchorStorage {
+	return storage.NewAnchorStorage(db)
 }
 
 func (a *Agent) Start(ctx context.Context) error {
@@ -82,6 +187,29 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	a.logger.Info("Behavior agent subscribed to consolidation trigger only",
 		"note", "Episodes will be created during consolidation from Redis sensor data")
+
+	// Start pattern discovery agents if enabled
+	if a.cfg.PatternDiscoveryEnabled {
+		a.logger.Info("Starting pattern discovery agents")
+
+		// Start distance computation agent
+		if a.distanceAgent != nil {
+			go func() {
+				if err := a.distanceAgent.Start(ctx); err != nil {
+					a.logger.Error("Distance computation agent error", "error", err)
+				}
+			}()
+		}
+
+		// Start pattern discovery agent
+		if a.discoveryAgent != nil {
+			go func() {
+				if err := a.discoveryAgent.Start(ctx); err != nil {
+					a.logger.Error("Pattern discovery agent error", "error", err)
+				}
+			}()
+		}
+	}
 
 	// go a.runConsolidationJob(ctx)
 
@@ -763,6 +891,179 @@ func (a *Agent) createEpisodeInDB(ctx context.Context, location string, startTim
 	return err
 }
 
+// createAnchorsFromEpisodes creates semantic anchors from behavioral episodes
+func (a *Agent) createAnchorsFromEpisodes(ctx context.Context, sinceTime time.Time, location string) (int, error) {
+	if a.anchorCreator == nil {
+		a.logger.Debug("Anchor creator not initialized, skipping anchor creation")
+		return 0, nil
+	}
+
+	// Query episodes created since sinceTime
+	query := `
+		SELECT id, jsonld
+		FROM behavioral_episodes
+		WHERE (jsonld->>'jeeves:startedAt')::timestamptz >= $1
+		AND ($2 = 'universe' OR (jsonld->'adl:activity'->'adl:location'->>'name') = $2)
+		ORDER BY (jsonld->>'jeeves:startedAt')::timestamptz ASC
+	`
+
+	rows, err := a.pgClient.Query(ctx, query, sinceTime, location)
+	if err != nil {
+		return 0, fmt.Errorf("failed to query episodes: %w", err)
+	}
+	defer rows.Close()
+
+	anchorsCreated := 0
+
+	for rows.Next() {
+		var episodeID string
+		var jsonldData []byte
+
+		if err := rows.Scan(&episodeID, &jsonldData); err != nil {
+			a.logger.Warn("Failed to scan episode", "error", err)
+			continue
+		}
+
+		// Parse episode JSON
+		var episode map[string]interface{}
+		if err := json.Unmarshal(jsonldData, &episode); err != nil {
+			a.logger.Warn("Failed to parse episode", "episode_id", episodeID, "error", err)
+			continue
+		}
+
+		// Extract location and timestamp from episode JSON-LD structure
+		// Path: adl:activity -> adl:location -> name
+		var locationName string
+		if activity, ok := episode["adl:activity"].(map[string]interface{}); ok {
+			if location, ok := activity["adl:location"].(map[string]interface{}); ok {
+				locationName, _ = location["name"].(string)
+			}
+		}
+
+		if locationName == "" {
+			a.logger.Warn("Episode missing location", "episode_id", episodeID)
+			continue
+		}
+
+		timestampStr, ok := episode["jeeves:startedAt"].(string)
+		if !ok {
+			a.logger.Warn("Episode missing timestamp", "episode_id", episodeID)
+			continue
+		}
+		timestamp, err := time.Parse(time.RFC3339, timestampStr)
+		if err != nil {
+			a.logger.Warn("Failed to parse timestamp", "episode_id", episodeID, "error", err)
+			continue
+		}
+
+		// Gather sensor signals from Redis for this episode
+		signals := a.gatherSignalsForEpisode(ctx, locationName, timestamp)
+
+		if len(signals) == 0 {
+			a.logger.Debug("No signals found for episode, skipping anchor",
+				"episode_id", episodeID,
+				"location", locationName)
+			continue
+		}
+
+		// Create semantic anchor
+		anchor, err := a.anchorCreator.CreateAnchor(ctx, locationName, timestamp, signals)
+		if err != nil {
+			a.logger.Warn("Failed to create anchor",
+				"episode_id", episodeID,
+				"location", locationName,
+				"error", err)
+			continue
+		}
+
+		anchorsCreated++
+		a.logger.Debug("Anchor created",
+			"anchor_id", anchor.ID,
+			"episode_id", episodeID,
+			"location", locationName,
+			"timestamp", timestamp.Format(time.RFC3339))
+	}
+
+	if err := rows.Err(); err != nil {
+		return anchorsCreated, fmt.Errorf("error iterating episodes: %w", err)
+	}
+
+	a.logger.Info("Anchor creation from episodes completed",
+		"anchors_created", anchorsCreated,
+		"since", sinceTime.Format(time.RFC3339))
+
+	return anchorsCreated, nil
+}
+
+// gatherSignalsForEpisode retrieves sensor signals for an episode from Redis
+func (a *Agent) gatherSignalsForEpisode(ctx context.Context, location string, timestamp time.Time) []types.ActivitySignal {
+	signals := []types.ActivitySignal{}
+
+	// Get motion signal (look back 5 minutes before episode start)
+	motionKey := fmt.Sprintf("sensor:motion:%s", location)
+	lookback := timestamp.Add(-5 * time.Minute)
+
+	members, err := a.redis.ZRangeByScoreWithScores(ctx, motionKey,
+		float64(lookback.UnixMilli()),
+		float64(timestamp.UnixMilli()))
+
+	if err == nil && len(members) > 0 {
+		signals = append(signals, types.ActivitySignal{
+			Type:       "motion",
+			Confidence: 0.8,
+			Timestamp:  timestamp,
+			Value: map[string]interface{}{
+				"state": "detected",
+			},
+		})
+	}
+
+	// Get lighting signal
+	lightingKey := fmt.Sprintf("sensor:lighting:%s", location)
+	members, err = a.redis.ZRangeByScoreWithScores(ctx, lightingKey,
+		float64(lookback.UnixMilli()),
+		float64(timestamp.UnixMilli()))
+
+	if err == nil && len(members) > 0 {
+		// Parse the most recent lighting event
+		var lightData map[string]interface{}
+		if err := json.Unmarshal([]byte(members[len(members)-1].Member), &lightData); err == nil {
+			signals = append(signals, types.ActivitySignal{
+				Type:       "lighting",
+				Confidence: 0.7,
+				Timestamp:  timestamp,
+				Value: map[string]interface{}{
+					"state":  lightData["state"],
+					"source": lightData["source"],
+				},
+			})
+		}
+	}
+
+	// Get media signal if available
+	mediaKey := fmt.Sprintf("sensor:media:%s", location)
+	members, err = a.redis.ZRangeByScoreWithScores(ctx, mediaKey,
+		float64(lookback.UnixMilli()),
+		float64(timestamp.UnixMilli()))
+
+	if err == nil && len(members) > 0 {
+		var mediaData map[string]interface{}
+		if err := json.Unmarshal([]byte(members[len(members)-1].Member), &mediaData); err == nil {
+			signals = append(signals, types.ActivitySignal{
+				Type:       "media",
+				Confidence: 0.9,
+				Timestamp:  timestamp,
+				Value: map[string]interface{}{
+					"state":      mediaData["state"],
+					"media_type": mediaData["media_type"],
+				},
+			})
+		}
+	}
+
+	return signals
+}
+
 func (a *Agent) performConsolidation(ctx context.Context, sinceTime time.Time, location string) error {
 	a.logger.Info("=== CONSOLIDATION ORCHESTRATION START ===",
 		"since", sinceTime.Format(time.RFC3339),
@@ -779,6 +1080,19 @@ func (a *Agent) performConsolidation(ctx context.Context, sinceTime time.Time, l
 		a.logger.Info("Episodes created from sensor data",
 			"count", episodesCreated,
 			"since", sinceTime.Format(time.RFC3339))
+	}
+
+	// STEP 0.5: Create semantic anchors from episodes
+	if a.anchorCreator != nil {
+		a.logger.Info("--- PHASE 0.5: SEMANTIC ANCHOR CREATION ---")
+		anchorsCreated, err := a.createAnchorsFromEpisodes(ctx, sinceTime, location)
+		if err != nil {
+			a.logger.Error("Failed to create anchors from episodes", "error", err)
+		} else {
+			a.logger.Info("Semantic anchors created successfully",
+				"count", anchorsCreated,
+				"since", sinceTime.Format(time.RFC3339))
+		}
 	}
 
 	// STEP 1: Get unconsolidated episodes from database

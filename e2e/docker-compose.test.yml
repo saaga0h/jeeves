@@ -117,8 +117,9 @@ services:
       - JEEVES_REDIS_PORT=6379
       - JEEVES_LOG_LEVEL=debug
       - JEEVES_OCCUPANCY_ANALYSIS_INTERVAL_SEC=60
-      - JEEVES_LLM_ENDPOINT=http://host.docker.internal:11434/api/generate
+      - JEEVES_LLM_ENDPOINT=http://host.docker.internal:11434
       - JEEVES_LLM_MODEL=mixtral:8x7b
+
     depends_on:
       mosquitto:
         condition: service_healthy
@@ -154,6 +155,15 @@ services:
       JEEVES_LOG_LEVEL: "debug"
       JEEVES_LLM_ENDPOINT: http://host.docker.internal:11434
       JEEVES_LLM_MODEL: mixtral:8x7b
+      # Pattern Discovery Configuration
+      JEEVES_PATTERN_DISCOVERY_ENABLED: "true"
+      JEEVES_PATTERN_DISTANCE_STRATEGY: "llm_first"
+      JEEVES_PATTERN_DISCOVERY_INTERVAL_HOURS: 6
+      JEEVES_PATTERN_DISCOVERY_BATCH_SIZE: 100
+      JEEVES_PATTERN_CLUSTERING_EPSILON: 0.3
+      JEEVES_PATTERN_CLUSTERING_MIN_POINTS: 3
+      JEEVES_PATTERN_MIN_ANCHORS_FOR_DISCOVERY: 10
+      JEEVES_PATTERN_LOOKBACK_HOURS: 168
 
     extra_hosts:
       - "host.docker.internal:host-gateway"

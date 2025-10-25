@@ -51,9 +51,13 @@ type ActivityInterpretation struct {
 type BehavioralPattern struct {
 	ID                     uuid.UUID              `json:"id"`
 	Name                   string                 `json:"name"`
+	Description            string                 `json:"description,omitempty"`  // LLM-generated description
 	PatternType            string                 `json:"pattern_type,omitempty"` // 'morning_routine', 'meal_cycle', etc.
 	Weight                 float64                `json:"weight"`                 // Starts at 0.1, only increases
+	ClusterSize            int                    `json:"cluster_size"`           // Number of anchors in cluster
+	Locations              []string               `json:"locations,omitempty"`    // Locations involved in pattern
 	Observations           int                    `json:"observations"`           // Times pattern observed
+	TimesObserved          int                    `json:"times_observed"`         // Alias for observations
 	Predictions            int                    `json:"predictions"`            // Times used for prediction
 	Acceptances            int                    `json:"acceptances"`            // Predictions accepted
 	Rejections             int                    `json:"rejections"`             // Predictions rejected
@@ -61,7 +65,8 @@ type BehavioralPattern struct {
 	LastSeen               time.Time              `json:"last_seen"`
 	LastUseful             *time.Time             `json:"last_useful,omitempty"`             // Last successful prediction
 	TypicalDurationMinutes *int                   `json:"typical_duration_minutes,omitempty"` // Expected duration
-	Context                map[string]interface{} `json:"context,omitempty"`                 // Typical context for this pattern
+	Context                map[string]interface{} `json:"context,omitempty"`                 // Typical context (deprecated)
+	DominantContext        map[string]interface{} `json:"dominant_context,omitempty"`        // Dominant context from cluster
 	CreatedAt              time.Time              `json:"created_at"`
 	UpdatedAt              time.Time              `json:"updated_at"`
 }
@@ -73,4 +78,16 @@ type AnchorDistance struct {
 	Distance   float64   `json:"distance"`   // 0.0-1.0 (cosine distance)
 	Source     string    `json:"source"`     // 'llm', 'learned', 'vector'
 	ComputedAt time.Time `json:"computed_at"`
+}
+
+// LearnedDistance represents a pattern-based distance in the learned library.
+type LearnedDistance struct {
+	ID             uuid.UUID  `json:"id"`
+	PatternKey     string     `json:"pattern_key"`     // Generated from anchor characteristics
+	Distance       float64    `json:"distance"`        // 0.0-1.0
+	Interpretation string     `json:"interpretation"`  // LLM's explanation
+	TimesUsed      int        `json:"times_used"`      // Usage counter
+	LastUsed       *time.Time `json:"last_used,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }

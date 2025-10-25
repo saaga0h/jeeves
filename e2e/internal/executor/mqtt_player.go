@@ -199,10 +199,25 @@ func (p *MQTTPlayer) Publish(topic string, qos byte, retain bool, payload []byte
 	return nil
 }
 
-// PublishBehaviorEvent publishes behavior control events (consolidation triggers)
+// PublishBehaviorEvent publishes behavior control events (consolidation, distance computation, pattern discovery)
 func (p *MQTTPlayer) PublishBehaviorEvent(location string, data map[string]interface{}) error {
-	p.logger.Printf("DEBUG: PublishBehaviorEvent called with location='%s'", location)
-	topic := "automation/behavior/consolidate"
+	p.logger.Printf("DEBUG: PublishBehaviorEvent called with location='%s', data=%v", location, data)
+
+	// Determine the topic based on the action
+	topic := "automation/behavior/consolidate" // default
+
+	if action, ok := data["action"].(string); ok {
+		switch action {
+		case "consolidate":
+			topic = "automation/behavior/consolidate"
+		case "compute_distances":
+			topic = "automation/behavior/compute_distances"
+		case "discover_patterns":
+			topic = "automation/behavior/discover_patterns"
+		default:
+			p.logger.Printf("WARNING: Unknown action '%s', using consolidate topic", action)
+		}
+	}
 
 	// Create the payload with location context
 	payload := map[string]interface{}{

@@ -74,7 +74,7 @@ func (a *DiscoveryAgent) Start(ctx context.Context) error {
 	}
 
 	if a.testMode {
-		// Test mode: wait for explicit triggers
+		// Test mode: wait for explicit triggers only
 		a.logger.Info("Pattern discovery agent running in test mode")
 		for {
 			select {
@@ -88,7 +88,7 @@ func (a *DiscoveryAgent) Start(ctx context.Context) error {
 		}
 	}
 
-	// Production mode: periodic execution
+	// Production mode: periodic execution AND MQTT triggers
 	a.logger.Info("Pattern discovery agent running in production mode",
 		"interval", a.config.Interval)
 
@@ -97,6 +97,11 @@ func (a *DiscoveryAgent) Start(ctx context.Context) error {
 
 	for {
 		select {
+		case trigger := <-a.testTriggers:
+			// Also process MQTT triggers in production mode (for test scenarios)
+			if err := a.discoverPatterns(ctx, trigger.MinAnchors, trigger.LookbackHours); err != nil {
+				a.logger.Error("Pattern discovery failed", "error", err)
+			}
 		case <-ticker.C:
 			if err := a.discoverPatterns(ctx, a.config.MinAnchors, a.config.LookbackHours); err != nil {
 				a.logger.Error("Pattern discovery failed", "error", err)

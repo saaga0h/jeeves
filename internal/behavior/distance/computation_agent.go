@@ -20,6 +20,7 @@ import (
 // ComputationConfig configures distance computation behavior
 type ComputationConfig struct {
 	Strategy      string        // "llm_first", "learned_first", "vector_first"
+	Model         string        // LLM model name (e.g., "mixtral:8x7b")
 	Interval      time.Duration // production: 6h, tests: triggered
 	BatchSize     int           // default: 100
 	LookbackHours int           // how far back to compute distances
@@ -84,7 +85,7 @@ func (a *ComputationAgent) Start(ctx context.Context) error {
 	}
 
 	if a.testMode {
-		// Test mode: wait for explicit triggers
+		// Test mode: wait for explicit triggers only
 		a.logger.Info("Distance computation agent running in test mode")
 		for {
 			select {
@@ -98,7 +99,7 @@ func (a *ComputationAgent) Start(ctx context.Context) error {
 		}
 	}
 
-	// Production mode: periodic execution
+	// Production mode: periodic execution AND MQTT triggers
 	a.logger.Info("Distance computation agent running in production mode",
 		"interval", a.config.Interval)
 
@@ -107,6 +108,11 @@ func (a *ComputationAgent) Start(ctx context.Context) error {
 
 	for {
 		select {
+		case trigger := <-a.testTriggers:
+			// Also process MQTT triggers in production mode (for test scenarios)
+			if err := a.computeDistances(ctx, trigger.LookbackHours); err != nil {
+				a.logger.Error("Distance computation failed", "error", err)
+			}
 		case <-ticker.C:
 			if err := a.computeDistances(ctx, a.config.LookbackHours); err != nil {
 				a.logger.Error("Distance computation failed", "error", err)
@@ -344,6 +350,7 @@ Respond with ONLY valid JSON (no markdown, no explanation):
 		len(anchor2.Signals))
 
 	req := llm.GenerateRequest{
+		Model:  a.config.Model,
 		Prompt: prompt,
 		Format: "json", // Request JSON response
 	}

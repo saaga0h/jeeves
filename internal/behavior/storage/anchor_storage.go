@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/pgvector/pgvector-go"
 
 	"github.com/saaga0h/jeeves-platform/internal/behavior/types"
@@ -426,29 +427,55 @@ func (s *AnchorStorage) CreatePattern(ctx context.Context, pattern *types.Behavi
 		pattern.Weight = 0.1
 	}
 
-	// Marshal context to JSONB
+	// Marshal context and dominant_context to JSONB
+	// PostgreSQL JSONB columns should always have valid JSON, use {} for nil/empty
 	var contextJSON []byte
+	var dominantContextJSON []byte
 	var err error
-	if pattern.Context != nil {
+
+	if pattern.Context != nil && len(pattern.Context) > 0 {
 		contextJSON, err = json.Marshal(pattern.Context)
 		if err != nil {
 			return fmt.Errorf("failed to marshal context: %w", err)
 		}
+	} else {
+		contextJSON = []byte("{}")
+	}
+
+	if pattern.DominantContext != nil && len(pattern.DominantContext) > 0 {
+		dominantContextJSON, err = json.Marshal(pattern.DominantContext)
+		if err != nil {
+			return fmt.Errorf("failed to marshal dominant_context: %w", err)
+		}
+	} else {
+		dominantContextJSON = []byte("{}")
+	}
+
+	// Use pq.Array for TEXT[] fields
+	locations := pattern.Locations
+	if locations == nil {
+		locations = []string{}
 	}
 
 	query := `
 		INSERT INTO behavioral_patterns (
-			id, name, pattern_type, weight, observations, predictions, acceptances, rejections,
-			first_seen, last_seen, last_useful, typical_duration_minutes, context, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			id, name, description, pattern_type, weight, cluster_size, locations,
+			observations, times_observed, predictions, acceptances, rejections,
+			first_seen, last_seen, last_useful, typical_duration_minutes,
+			context, dominant_context, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 	`
 
 	_, err = s.db.ExecContext(ctx, query,
 		pattern.ID,
 		pattern.Name,
+		pattern.Description,
 		pattern.PatternType,
 		pattern.Weight,
+		pattern.ClusterSize,
+		pq.Array(locations),
 		pattern.Observations,
+		pattern.TimesObserved,
 		pattern.Predictions,
 		pattern.Acceptances,
 		pattern.Rejections,
@@ -457,6 +484,7 @@ func (s *AnchorStorage) CreatePattern(ctx context.Context, pattern *types.Behavi
 		pattern.LastUseful,
 		pattern.TypicalDurationMinutes,
 		contextJSON,
+		dominantContextJSON,
 		pattern.CreatedAt,
 		pattern.UpdatedAt,
 	)
@@ -472,21 +500,28 @@ func (s *AnchorStorage) CreatePattern(ctx context.Context, pattern *types.Behavi
 func (s *AnchorStorage) GetPattern(ctx context.Context, id uuid.UUID) (*types.BehavioralPattern, error) {
 	query := `
 		SELECT
-			id, name, pattern_type, weight, observations, predictions, acceptances, rejections,
-			first_seen, last_seen, last_useful, typical_duration_minutes, context, created_at, updated_at
+			id, name, description, pattern_type, weight, cluster_size, locations,
+			observations, times_observed, predictions, acceptances, rejections,
+			first_seen, last_seen, last_useful, typical_duration_minutes,
+			context, dominant_context, created_at, updated_at
 		FROM behavioral_patterns
 		WHERE id = $1
 	`
 
 	var pattern types.BehavioralPattern
 	var contextJSON []byte
+	var dominantContextJSON []byte
 
 	err := s.db.QueryRowContext(ctx, query, id).Scan(
 		&pattern.ID,
 		&pattern.Name,
+		&pattern.Description,
 		&pattern.PatternType,
 		&pattern.Weight,
+		&pattern.ClusterSize,
+		pq.Array(&pattern.Locations),
 		&pattern.Observations,
+		&pattern.TimesObserved,
 		&pattern.Predictions,
 		&pattern.Acceptances,
 		&pattern.Rejections,
@@ -495,6 +530,7 @@ func (s *AnchorStorage) GetPattern(ctx context.Context, id uuid.UUID) (*types.Be
 		&pattern.LastUseful,
 		&pattern.TypicalDurationMinutes,
 		&contextJSON,
+		&dominantContextJSON,
 		&pattern.CreatedAt,
 		&pattern.UpdatedAt,
 	)
@@ -513,6 +549,13 @@ func (s *AnchorStorage) GetPattern(ctx context.Context, id uuid.UUID) (*types.Be
 		}
 	}
 
+	// Unmarshal dominant_context if present
+	if dominantContextJSON != nil {
+		if err := json.Unmarshal(dominantContextJSON, &pattern.DominantContext); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal dominant_context: %w", err)
+		}
+	}
+
 	return &pattern, nil
 }
 
@@ -520,9 +563,11 @@ func (s *AnchorStorage) GetPattern(ctx context.Context, id uuid.UUID) (*types.Be
 func (s *AnchorStorage) UpdatePattern(ctx context.Context, pattern *types.BehavioralPattern) error {
 	pattern.UpdatedAt = time.Now()
 
-	// Marshal context to JSONB
+	// Marshal context and dominant_context to JSONB
 	var contextJSON []byte
+	var dominantContextJSON []byte
 	var err error
+
 	if pattern.Context != nil {
 		contextJSON, err = json.Marshal(pattern.Context)
 		if err != nil {
@@ -530,30 +575,52 @@ func (s *AnchorStorage) UpdatePattern(ctx context.Context, pattern *types.Behavi
 		}
 	}
 
+	if pattern.DominantContext != nil {
+		dominantContextJSON, err = json.Marshal(pattern.DominantContext)
+		if err != nil {
+			return fmt.Errorf("failed to marshal dominant_context: %w", err)
+		}
+	}
+
+	// Handle locations
+	locations := pattern.Locations
+	if locations == nil {
+		locations = []string{}
+	}
+
 	query := `
 		UPDATE behavioral_patterns
 		SET
 			name = $2,
-			pattern_type = $3,
-			weight = $4,
-			observations = $5,
-			predictions = $6,
-			acceptances = $7,
-			rejections = $8,
-			last_seen = $9,
-			last_useful = $10,
-			typical_duration_minutes = $11,
-			context = $12,
-			updated_at = $13
+			description = $3,
+			pattern_type = $4,
+			weight = $5,
+			cluster_size = $6,
+			locations = $7,
+			observations = $8,
+			times_observed = $9,
+			predictions = $10,
+			acceptances = $11,
+			rejections = $12,
+			last_seen = $13,
+			last_useful = $14,
+			typical_duration_minutes = $15,
+			context = $16,
+			dominant_context = $17,
+			updated_at = $18
 		WHERE id = $1
 	`
 
 	result, err := s.db.ExecContext(ctx, query,
 		pattern.ID,
 		pattern.Name,
+		pattern.Description,
 		pattern.PatternType,
 		pattern.Weight,
+		pattern.ClusterSize,
+		pq.Array(locations),
 		pattern.Observations,
+		pattern.TimesObserved,
 		pattern.Predictions,
 		pattern.Acceptances,
 		pattern.Rejections,
@@ -561,6 +628,7 @@ func (s *AnchorStorage) UpdatePattern(ctx context.Context, pattern *types.Behavi
 		pattern.LastUseful,
 		pattern.TypicalDurationMinutes,
 		contextJSON,
+		dominantContextJSON,
 		pattern.UpdatedAt,
 	)
 
@@ -584,8 +652,10 @@ func (s *AnchorStorage) UpdatePattern(ctx context.Context, pattern *types.Behavi
 func (s *AnchorStorage) GetTopPatterns(ctx context.Context, limit int) ([]*types.BehavioralPattern, error) {
 	query := `
 		SELECT
-			id, name, pattern_type, weight, observations, predictions, acceptances, rejections,
-			first_seen, last_seen, last_useful, typical_duration_minutes, context, created_at, updated_at
+			id, name, description, pattern_type, weight, cluster_size, locations,
+			observations, times_observed, predictions, acceptances, rejections,
+			first_seen, last_seen, last_useful, typical_duration_minutes,
+			context, dominant_context, created_at, updated_at
 		FROM behavioral_patterns
 		ORDER BY weight DESC
 		LIMIT $1
@@ -602,13 +672,18 @@ func (s *AnchorStorage) GetTopPatterns(ctx context.Context, limit int) ([]*types
 	for rows.Next() {
 		var pattern types.BehavioralPattern
 		var contextJSON []byte
+		var dominantContextJSON []byte
 
 		err := rows.Scan(
 			&pattern.ID,
 			&pattern.Name,
+			&pattern.Description,
 			&pattern.PatternType,
 			&pattern.Weight,
+			&pattern.ClusterSize,
+			pq.Array(&pattern.Locations),
 			&pattern.Observations,
+			&pattern.TimesObserved,
 			&pattern.Predictions,
 			&pattern.Acceptances,
 			&pattern.Rejections,
@@ -617,6 +692,7 @@ func (s *AnchorStorage) GetTopPatterns(ctx context.Context, limit int) ([]*types
 			&pattern.LastUseful,
 			&pattern.TypicalDurationMinutes,
 			&contextJSON,
+			&dominantContextJSON,
 			&pattern.CreatedAt,
 			&pattern.UpdatedAt,
 		)
@@ -629,6 +705,13 @@ func (s *AnchorStorage) GetTopPatterns(ctx context.Context, limit int) ([]*types
 		if contextJSON != nil {
 			if err := json.Unmarshal(contextJSON, &pattern.Context); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal context: %w", err)
+			}
+		}
+
+		// Unmarshal dominant_context if present
+		if dominantContextJSON != nil {
+			if err := json.Unmarshal(dominantContextJSON, &pattern.DominantContext); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal dominant_context: %w", err)
 			}
 		}
 
@@ -747,7 +830,7 @@ func (s *AnchorStorage) GetAnchorsByIDs(ctx context.Context, ids []uuid.UUID) ([
 		ORDER BY timestamp ASC
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, idStrings)
+	rows, err := s.db.QueryContext(ctx, query, pq.Array(idStrings))
 	if err != nil {
 		return nil, fmt.Errorf("failed to query anchors by IDs: %w", err)
 	}

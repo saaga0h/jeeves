@@ -72,6 +72,16 @@ type Config struct {
 	ConsolidationIntervalHours int
 	ConsolidationLookbackHours int
 	ConsolidationMaxGapMinutes int
+
+	// Pattern Discovery configuration
+	PatternDiscoveryEnabled       bool
+	PatternDistanceStrategy       string // "llm_first", "learned_first", "vector_first"
+	PatternDiscoveryIntervalHours int
+	PatternDiscoveryBatchSize     int
+	PatternClusteringEpsilon      float64
+	PatternClusteringMinPoints    int
+	PatternMinAnchorsForDiscovery int
+	PatternLookbackHours          int
 }
 
 // NewConfig creates a new Config with default values
@@ -115,14 +125,23 @@ func NewConfig() *Config {
 		APIPort:               3002,
 		// Occupancy agent defaults
 		OccupancyAnalysisIntervalSec: 30,
-		LLMEndpoint:                  "http://localhost:11434/api/generate",
-		LLMModel:                     "mixtral:8:7b",
+		LLMEndpoint:                  "http://localhost:11434",
+		LLMModel:                     "mixtral:8x7b",
 		LLMMinConfidence:             0.7,
 		MaxEventHistory:              100,
 		// Consolidation defaults
 		ConsolidationIntervalHours: 24,
 		ConsolidationLookbackHours: 48,
 		ConsolidationMaxGapMinutes: 120,
+		// Pattern Discovery defaults
+		PatternDiscoveryEnabled:       false,
+		PatternDistanceStrategy:       "vector_first",
+		PatternDiscoveryIntervalHours: 6,
+		PatternDiscoveryBatchSize:     100,
+		PatternClusteringEpsilon:      0.3,
+		PatternClusteringMinPoints:    3,
+		PatternMinAnchorsForDiscovery: 10,
+		PatternLookbackHours:          168, // 7 days
 	}
 }
 
@@ -318,6 +337,46 @@ func (c *Config) LoadFromEnv() {
 			c.ConsolidationMaxGapMinutes = minutes
 		}
 	}
+
+	// Pattern Discovery configuration
+	if v := os.Getenv("JEEVES_PATTERN_DISCOVERY_ENABLED"); v != "" {
+		if enabled, err := strconv.ParseBool(v); err == nil {
+			c.PatternDiscoveryEnabled = enabled
+		}
+	}
+	if v := os.Getenv("JEEVES_PATTERN_DISTANCE_STRATEGY"); v != "" {
+		c.PatternDistanceStrategy = v
+	}
+	if v := os.Getenv("JEEVES_PATTERN_DISCOVERY_INTERVAL_HOURS"); v != "" {
+		if hours, err := strconv.Atoi(v); err == nil {
+			c.PatternDiscoveryIntervalHours = hours
+		}
+	}
+	if v := os.Getenv("JEEVES_PATTERN_DISCOVERY_BATCH_SIZE"); v != "" {
+		if batchSize, err := strconv.Atoi(v); err == nil {
+			c.PatternDiscoveryBatchSize = batchSize
+		}
+	}
+	if v := os.Getenv("JEEVES_PATTERN_CLUSTERING_EPSILON"); v != "" {
+		if epsilon, err := strconv.ParseFloat(v, 64); err == nil {
+			c.PatternClusteringEpsilon = epsilon
+		}
+	}
+	if v := os.Getenv("JEEVES_PATTERN_CLUSTERING_MIN_POINTS"); v != "" {
+		if minPoints, err := strconv.Atoi(v); err == nil {
+			c.PatternClusteringMinPoints = minPoints
+		}
+	}
+	if v := os.Getenv("JEEVES_PATTERN_MIN_ANCHORS_FOR_DISCOVERY"); v != "" {
+		if minAnchors, err := strconv.Atoi(v); err == nil {
+			c.PatternMinAnchorsForDiscovery = minAnchors
+		}
+	}
+	if v := os.Getenv("JEEVES_PATTERN_LOOKBACK_HOURS"); v != "" {
+		if hours, err := strconv.Atoi(v); err == nil {
+			c.PatternLookbackHours = hours
+		}
+	}
 }
 
 // LoadFromFlags parses command-line flags and overrides config values
@@ -380,6 +439,16 @@ func (c *Config) LoadFromFlags() {
 	pflag.IntVar(&c.ConsolidationIntervalHours, "consolidation-interval-hours", c.ConsolidationIntervalHours, "Episode consolidation interval in hours")
 	pflag.IntVar(&c.ConsolidationLookbackHours, "consolidation-lookback-hours", c.ConsolidationLookbackHours, "Episode consolidation lookback period in hours")
 	pflag.IntVar(&c.ConsolidationMaxGapMinutes, "consolidation-max-gap-minutes", c.ConsolidationMaxGapMinutes, "Maximum gap between episodes for consolidation in minutes")
+
+	// Pattern Discovery flags
+	pflag.BoolVar(&c.PatternDiscoveryEnabled, "pattern-discovery-enabled", c.PatternDiscoveryEnabled, "Enable pattern discovery")
+	pflag.StringVar(&c.PatternDistanceStrategy, "pattern-distance-strategy", c.PatternDistanceStrategy, "Distance computation strategy (llm_first, learned_first, vector_first)")
+	pflag.IntVar(&c.PatternDiscoveryIntervalHours, "pattern-discovery-interval-hours", c.PatternDiscoveryIntervalHours, "Pattern discovery interval in hours")
+	pflag.IntVar(&c.PatternDiscoveryBatchSize, "pattern-discovery-batch-size", c.PatternDiscoveryBatchSize, "Pattern discovery batch size")
+	pflag.Float64Var(&c.PatternClusteringEpsilon, "pattern-clustering-epsilon", c.PatternClusteringEpsilon, "DBSCAN epsilon (maximum distance for neighborhood)")
+	pflag.IntVar(&c.PatternClusteringMinPoints, "pattern-clustering-min-points", c.PatternClusteringMinPoints, "DBSCAN minimum points to form cluster")
+	pflag.IntVar(&c.PatternMinAnchorsForDiscovery, "pattern-min-anchors-for-discovery", c.PatternMinAnchorsForDiscovery, "Minimum anchors required for pattern discovery")
+	pflag.IntVar(&c.PatternLookbackHours, "pattern-lookback-hours", c.PatternLookbackHours, "Pattern discovery lookback period in hours")
 
 	pflag.Parse()
 }

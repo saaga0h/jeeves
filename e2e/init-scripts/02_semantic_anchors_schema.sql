@@ -101,18 +101,46 @@ CREATE INDEX idx_distances_anchor1 ON anchor_distances(anchor1_id);
 CREATE INDEX idx_distances_anchor2 ON anchor_distances(anchor2_id);
 CREATE INDEX idx_distances_source ON anchor_distances(source);
 
+-- Learned distances: Pattern-based distance library built from LLM computations
+CREATE TABLE learned_distances (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    pattern_key TEXT NOT NULL UNIQUE,  -- Generated from anchor characteristics
+    -- Example: "morning_bedroom_motion_weekday"
+
+    distance FLOAT NOT NULL CHECK (distance >= 0 AND distance <= 1),
+    interpretation TEXT,  -- LLM's explanation of why they're similar/different
+
+    -- Usage tracking
+    times_used INT NOT NULL DEFAULT 0,
+    last_used TIMESTAMPTZ,
+
+    -- Metadata
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_learned_pattern_key ON learned_distances(pattern_key);
+CREATE INDEX idx_learned_last_used ON learned_distances(last_used) WHERE last_used IS NOT NULL;
+
 -- Behavioral patterns: Discovered patterns with weight-based ranking
 CREATE TABLE behavioral_patterns (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     name TEXT NOT NULL,
+    description TEXT,  -- LLM-generated description of the pattern
     pattern_type TEXT,  -- 'morning_routine', 'meal_cycle', etc.
 
     -- Weight (decimal scale: starts at 0.1, only increases)
     weight FLOAT NOT NULL DEFAULT 0.1 CHECK (weight >= 0.1),
 
+    -- Cluster metadata
+    cluster_size INT NOT NULL DEFAULT 0,  -- number of anchors in cluster
+    locations TEXT[] NOT NULL DEFAULT '{}',  -- locations involved in pattern
+
     -- Usage tracking
-    observations INT NOT NULL DEFAULT 0,      -- times pattern observed
+    observations INT NOT NULL DEFAULT 0,      -- times pattern observed (alias for times_observed)
+    times_observed INT NOT NULL DEFAULT 0,    -- times pattern observed
     predictions INT NOT NULL DEFAULT 0,       -- times used for prediction
     acceptances INT NOT NULL DEFAULT 0,       -- predictions accepted
     rejections INT NOT NULL DEFAULT 0,        -- predictions rejected
@@ -124,7 +152,8 @@ CREATE TABLE behavioral_patterns (
 
     -- Pattern metadata
     typical_duration_minutes INT,
-    context JSONB,  -- typical context for this pattern
+    context JSONB,  -- typical context for this pattern (deprecated, use dominant_context)
+    dominant_context JSONB,  -- dominant context from cluster (time_of_day, day_type, etc.)
 
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
