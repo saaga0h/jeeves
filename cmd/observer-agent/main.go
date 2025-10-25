@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/saaga0h/jeeves-platform/pkg/config"
@@ -57,6 +59,31 @@ func main() {
 
 	// Get local timezone (EEST or whatever system is set to)
 	localTZ := time.Local
+
+	// Anchor visualization endpoint
+	http.HandleFunc("/api/anchors/visualization", func(w http.ResponseWriter, r *http.Request) {
+		logger.Debug("Received request for anchor visualization")
+
+		anchors, err := getAnchorsWithPatterns(pgClient, logger)
+		if err != nil {
+			logger.Error("Failed to get anchors with patterns", "error", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		logger.Debug("Successfully retrieved anchors",
+			"count", len(anchors.Anchors),
+			"outliers", anchors.Stats.OutlierCount)
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(anchors); err != nil {
+			logger.Error("Failed to encode anchors response", "error", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		logger.Debug("Successfully sent anchor visualization response")
+	})
 
 	// API endpoint
 	http.HandleFunc("/api/episodes", func(w http.ResponseWriter, r *http.Request) {
@@ -268,4 +295,183 @@ func getEpisodesWithChildren(pg postgres.Client, from, to time.Time) ([]EpisodeD
 	}
 
 	return episodes, nil
+}
+
+type AnchorVisualizationData struct {
+	Anchors []AnchorPoint `json:"anchors"`
+	Stats   AnchorStats   `json:"stats"`
+}
+
+type AnchorPoint struct {
+	ID          string    `json:"id"`
+	Embedding   []float64 `json:"embedding"`
+	Location    string    `json:"location"`
+	Timestamp   time.Time `json:"timestamp"`
+	PatternID   *string   `json:"pattern_id"`
+	PatternName *string   `json:"pattern_name"`
+	PatternType *string   `json:"pattern_type"`
+	TimeOfDay   string    `json:"time_of_day"`
+	DayType     string    `json:"day_type"`
+	Weight      float64   `json:"weight"`
+}
+
+type AnchorStats struct {
+	TotalCount    int                `json:"total_count"`
+	OutlierCount  int                `json:"outlier_count"`
+	OutlierRatio  float64            `json:"outlier_ratio"`
+	PatternCounts map[string]int     `json:"pattern_counts"`
+}
+
+func getAnchorsWithPatterns(pg postgres.Client, logger *slog.Logger) (*AnchorVisualizationData, error) {
+	logger.Debug("Starting getAnchorsWithPatterns")
+
+	query := `
+		SELECT
+			a.id,
+			a.semantic_embedding,
+			a.location,
+			a.timestamp,
+			a.pattern_id,
+			p.name as pattern_name,
+			p.pattern_type,
+			p.weight,
+			a.context->>'time_of_day' as time_of_day,
+			a.context->>'day_type' as day_type
+		FROM semantic_anchors a
+		LEFT JOIN behavioral_patterns p ON a.pattern_id = p.id
+		ORDER BY a.timestamp DESC
+	`
+
+	logger.Debug("Executing anchor query")
+	rows, err := pg.Query(context.Background(), query)
+	if err != nil {
+		logger.Error("Failed to execute anchor query", "error", err)
+		return nil, fmt.Errorf("failed to query anchors: %w", err)
+	}
+	defer rows.Close()
+
+	var anchors []AnchorPoint
+	patternCounts := make(map[string]int)
+	outlierCount := 0
+
+	rowCount := 0
+	for rows.Next() {
+		rowCount++
+		logger.Debug("Processing anchor row", "row_number", rowCount)
+
+		var anchor AnchorPoint
+		var embeddingText string
+		var patternID *string
+		var patternName *string
+		var patternType *string
+		var weight *float64
+		var timeOfDay *string
+		var dayType *string
+
+		err := rows.Scan(
+			&anchor.ID,
+			&embeddingText,
+			&anchor.Location,
+			&anchor.Timestamp,
+			&patternID,
+			&patternName,
+			&patternType,
+			&weight,
+			&timeOfDay,
+			&dayType,
+		)
+		if err != nil {
+			logger.Error("Failed to scan anchor row", "row_number", rowCount, "error", err)
+			return nil, fmt.Errorf("failed to scan anchor: %w", err)
+		}
+
+		logger.Debug("Scanned anchor",
+			"id", anchor.ID,
+			"location", anchor.Location,
+			"embedding_text_len", len(embeddingText),
+			"has_pattern", patternID != nil)
+
+		// Parse pgvector text format: [val1,val2,val3,...]
+		// Remove brackets and split by comma
+		if len(embeddingText) < 2 || embeddingText[0] != '[' || embeddingText[len(embeddingText)-1] != ']' {
+			logger.Error("Invalid embedding text format", "text", embeddingText[:min(50, len(embeddingText))])
+			return nil, fmt.Errorf("invalid embedding text format")
+		}
+
+		// Remove brackets
+		embeddingText = embeddingText[1 : len(embeddingText)-1]
+
+		// Split by comma and parse each value
+		values := strings.Split(embeddingText, ",")
+		embedding := make([]float64, len(values))
+
+		for i, valStr := range values {
+			val, err := strconv.ParseFloat(strings.TrimSpace(valStr), 64)
+			if err != nil {
+				logger.Error("Failed to parse embedding value",
+					"index", i,
+					"value", valStr,
+					"error", err)
+				return nil, fmt.Errorf("failed to parse embedding value at index %d: %w", i, err)
+			}
+			embedding[i] = val
+		}
+
+		logger.Debug("Successfully parsed embedding", "dimensions", len(embedding))
+
+		anchor.Embedding = embedding
+		anchor.PatternID = patternID
+		anchor.PatternName = patternName
+		anchor.PatternType = patternType
+
+		if weight != nil {
+			anchor.Weight = *weight
+		}
+
+		if timeOfDay != nil {
+			anchor.TimeOfDay = *timeOfDay
+		}
+		if dayType != nil {
+			anchor.DayType = *dayType
+		}
+
+		// Count outliers and patterns
+		if patternID == nil {
+			outlierCount++
+		} else if patternName != nil {
+			patternCounts[*patternName]++
+		}
+
+		anchors = append(anchors, anchor)
+	}
+
+	logger.Debug("Finished processing anchor rows", "total_rows", rowCount, "total_anchors", len(anchors))
+
+	// Check for any errors from iterating over rows
+	if err := rows.Err(); err != nil {
+		logger.Error("Error iterating over anchor rows", "error", err)
+		return nil, fmt.Errorf("error iterating rows: %w", err)
+	}
+
+	totalCount := len(anchors)
+	outlierRatio := 0.0
+	if totalCount > 0 {
+		outlierRatio = float64(outlierCount) / float64(totalCount)
+	}
+
+	logger.Debug("Computed anchor statistics",
+		"total_count", totalCount,
+		"outlier_count", outlierCount,
+		"outlier_ratio", outlierRatio,
+		"pattern_count", len(patternCounts))
+
+	return &AnchorVisualizationData{
+		Anchors: anchors,
+		Stats: AnchorStats{
+			TotalCount:    totalCount,
+			OutlierCount:  outlierCount,
+			OutlierRatio:  outlierRatio,
+			PatternCounts: patternCounts,
+		},
+	}, nil
 }

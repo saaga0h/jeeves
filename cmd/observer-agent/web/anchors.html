@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Anchor Visualization - J.E.E.V.E.S. Observer</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://unpkg.com/umap-js@1.4.0/lib/umap-js.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0a0e27;
+            color: #e8eaf6;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            margin-bottom: 30px;
+            border-bottom: 2px solid #2a3650;
+            padding-bottom: 20px;
+        }
+
+        h1 {
+            font-size: 28px;
+            font-weight: 600;
+            color: #4a9eff;
+            margin-bottom: 10px;
+        }
+
+        .nav-links {
+            margin-top: 15px;
+        }
+
+        .nav-links a {
+            color: #4a9eff;
+            text-decoration: none;
+            margin-right: 20px;
+            font-size: 14px;
+        }
+
+        .nav-links a:hover {
+            text-decoration: underline;
+        }
+
+        .controls {
+            background: #1e2740;
+            border: 1px solid #2a3650;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        .control-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .control-group label {
+            display: block;
+            font-size: 13px;
+            color: #a0a8c0;
+            margin-bottom: 8px;
+        }
+
+        .control-group input[type="range"] {
+            width: 200px;
+            margin-right: 10px;
+        }
+
+        .control-group .value {
+            display: inline-block;
+            min-width: 40px;
+            font-size: 13px;
+            color: #4a9eff;
+        }
+
+        button {
+            background: #4a9eff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+
+        button:hover {
+            background: #3a8eef;
+        }
+
+        button:disabled {
+            background: #2a3650;
+            cursor: not-allowed;
+        }
+
+        .stats-panel {
+            background: #1e2740;
+            border: 1px solid #2a3650;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+
+        .stat-item {
+            padding: 10px;
+            background: #0a0e27;
+            border-radius: 4px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #a0a8c0;
+            margin-bottom: 4px;
+        }
+
+        .stat-value {
+            font-size: 20px;
+            font-weight: 600;
+            color: #4a9eff;
+        }
+
+        .pattern-counts {
+            margin-top: 10px;
+        }
+
+        .pattern-counts h3 {
+            font-size: 14px;
+            color: #a0a8c0;
+            margin-bottom: 10px;
+        }
+
+        .pattern-item {
+            display: flex;
+            align-items: center;
+            padding: 6px 0;
+            font-size: 13px;
+        }
+
+        .pattern-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+
+        .pattern-name {
+            flex: 1;
+            color: #e8eaf6;
+        }
+
+        .pattern-count {
+            color: #4a9eff;
+            font-weight: 600;
+        }
+
+        .viz-container {
+            background: #1e2740;
+            border: 1px solid #2a3650;
+            border-radius: 8px;
+            padding: 20px;
+            position: relative;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #a0a8c0;
+            font-size: 14px;
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 40px;
+            height: 40px;
+            border: 4px solid #2a3650;
+            border-top-color: #4a9eff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 15px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        svg {
+            display: block;
+        }
+
+        .axis line,
+        .axis path {
+            stroke: #2a3650;
+        }
+
+        .axis text {
+            fill: #a0a8c0;
+            font-size: 11px;
+        }
+
+        .grid line {
+            stroke: #1a1e35;
+            stroke-opacity: 0.5;
+        }
+
+        .anchor-point {
+            cursor: pointer;
+            transition: r 0.2s;
+        }
+
+        .anchor-point:hover {
+            stroke: white;
+            stroke-width: 2;
+        }
+
+        .outlier {
+            fill: #666;
+            stroke: #888;
+            stroke-width: 1;
+        }
+
+        .tooltip {
+            position: absolute;
+            padding: 12px;
+            background: #1e2740;
+            border: 1px solid #2a3650;
+            border-radius: 6px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+            max-width: 300px;
+            z-index: 1000;
+        }
+
+        .tooltip.visible {
+            opacity: 1;
+        }
+
+        .tooltip-row {
+            margin-bottom: 6px;
+            font-size: 12px;
+        }
+
+        .tooltip-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .tooltip-label {
+            color: #a0a8c0;
+            margin-right: 6px;
+        }
+
+        .tooltip-value {
+            color: #e8eaf6;
+            font-weight: 500;
+        }
+
+        .legend {
+            margin-top: 20px;
+            padding: 15px;
+            background: #0a0e27;
+            border-radius: 4px;
+        }
+
+        .legend h3 {
+            font-size: 14px;
+            color: #a0a8c0;
+            margin-bottom: 10px;
+        }
+
+        .legend-items {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            font-size: 13px;
+        }
+
+        .error {
+            color: #ff6b9d;
+            padding: 20px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Behavioral Anchor Visualization</h1>
+            <p>UMAP projection of 128-dimensional semantic embeddings</p>
+            <div class="nav-links">
+                <a href="/">← Back to Episode Timeline</a>
+            </div>
+        </header>
+
+        <div class="stats-panel" id="stats-panel" style="display: none;">
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-label">Total Anchors</div>
+                    <div class="stat-value" id="total-count">-</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Outliers</div>
+                    <div class="stat-value" id="outlier-count">-</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Outlier Ratio</div>
+                    <div class="stat-value" id="outlier-ratio">-</div>
+                </div>
+            </div>
+            <div class="pattern-counts" id="pattern-counts"></div>
+        </div>
+
+        <div class="controls" id="controls" style="display: none;">
+            <div class="control-group">
+                <label>
+                    Number of Neighbors:
+                    <span class="value" id="neighbors-value">15</span>
+                </label>
+                <input type="range" id="neighbors-slider" min="5" max="50" value="15" step="1">
+            </div>
+            <div class="control-group">
+                <label>
+                    Minimum Distance:
+                    <span class="value" id="mindist-value">0.1</span>
+                </label>
+                <input type="range" id="mindist-slider" min="0.01" max="0.5" value="0.1" step="0.01">
+            </div>
+            <button id="recompute-btn">Recompute UMAP</button>
+        </div>
+
+        <div class="viz-container">
+            <div class="loading" id="loading">
+                <div class="loading-spinner"></div>
+                <div>Loading anchor data and computing UMAP projection...</div>
+            </div>
+            <div id="chart"></div>
+            <div class="legend" id="legend" style="display: none;"></div>
+        </div>
+
+        <div class="tooltip" id="tooltip"></div>
+    </div>
+
+    <script>
+        // Configuration
+        const width = 1000;
+        const height = 700;
+        const margin = { top: 20, right: 20, bottom: 40, left: 50 };
+        const chartWidth = width - margin.left - margin.right;
+        const chartHeight = height - margin.top - margin.bottom;
+
+        // Color scale for patterns (using d3 category colors)
+        const colorScale = d3.scaleOrdinal(d3.schemeCategory10);
+
+        // State
+        let anchorData = null;
+        let projectedData = null;
+
+        // Get UMAP parameters
+        function getUmapParams() {
+            return {
+                nComponents: 2,
+                nNeighbors: parseInt(document.getElementById('neighbors-slider').value),
+                minDist: parseFloat(document.getElementById('mindist-slider').value)
+            };
+        }
+
+        // Update parameter displays
+        document.getElementById('neighbors-slider').addEventListener('input', (e) => {
+            document.getElementById('neighbors-value').textContent = e.target.value;
+        });
+
+        document.getElementById('mindist-slider').addEventListener('input', (e) => {
+            document.getElementById('mindist-value').textContent = e.target.value;
+        });
+
+        // Fetch and visualize data
+        async function loadAndVisualize() {
+            try {
+                // Show loading
+                document.getElementById('loading').style.display = 'block';
+                document.getElementById('chart').innerHTML = '';
+                document.getElementById('legend').style.display = 'none';
+                document.getElementById('stats-panel').style.display = 'none';
+                document.getElementById('controls').style.display = 'none';
+
+                // Fetch anchor data
+                const response = await fetch('/api/anchors/visualization');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                anchorData = await response.json();
+
+                if (!anchorData.anchors || anchorData.anchors.length === 0) {
+                    document.getElementById('loading').innerHTML = '<div class="error">No anchor data available</div>';
+                    return;
+                }
+
+                // Update statistics
+                updateStats(anchorData.stats);
+
+                // Compute UMAP projection
+                await computeUmapAndVisualize();
+
+                // Show controls
+                document.getElementById('controls').style.display = 'block';
+
+            } catch (error) {
+                console.error('Error loading data:', error);
+                document.getElementById('loading').innerHTML = `<div class="error">Error loading data: ${error.message}</div>`;
+            }
+        }
+
+        // Compute UMAP and visualize
+        async function computeUmapAndVisualize() {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('chart').innerHTML = '';
+
+            // Small delay to show loading spinner
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+            const params = getUmapParams();
+
+            // Extract embeddings
+            const embeddings = anchorData.anchors.map(a => a.embedding);
+
+            // Run UMAP
+            const umap = new UMAP.UMAP({
+                nComponents: params.nComponents,
+                nNeighbors: Math.min(params.nNeighbors, embeddings.length - 1),
+                minDist: params.minDist
+            });
+
+            const projection = await umap.fitAsync(embeddings);
+
+            // Store projected data
+            projectedData = anchorData.anchors.map((anchor, i) => ({
+                ...anchor,
+                x: projection[i][0],
+                y: projection[i][1]
+            }));
+
+            // Hide loading
+            document.getElementById('loading').style.display = 'none';
+
+            // Visualize
+            visualize();
+        }
+
+        // Update statistics panel
+        function updateStats(stats) {
+            document.getElementById('total-count').textContent = stats.total_count;
+            document.getElementById('outlier-count').textContent = stats.outlier_count;
+            document.getElementById('outlier-ratio').textContent = (stats.outlier_ratio * 100).toFixed(1) + '%';
+
+            // Pattern counts
+            const patternCountsDiv = document.getElementById('pattern-counts');
+            if (Object.keys(stats.pattern_counts).length > 0) {
+                let html = '<h3>Pattern Distribution</h3>';
+                Object.entries(stats.pattern_counts).forEach(([name, count]) => {
+                    const color = colorScale(name);
+                    html += `
+                        <div class="pattern-item">
+                            <div class="pattern-color" style="background-color: ${color}"></div>
+                            <div class="pattern-name">${name}</div>
+                            <div class="pattern-count">${count}</div>
+                        </div>
+                    `;
+                });
+                patternCountsDiv.innerHTML = html;
+            } else {
+                patternCountsDiv.innerHTML = '';
+            }
+
+            document.getElementById('stats-panel').style.display = 'block';
+        }
+
+        // Create visualization
+        function visualize() {
+            // Create SVG
+            const svg = d3.select('#chart')
+                .append('svg')
+                .attr('width', width)
+                .attr('height', height);
+
+            const g = svg.append('g')
+                .attr('transform', `translate(${margin.left},${margin.top})`);
+
+            // Create scales
+            const xExtent = d3.extent(projectedData, d => d.x);
+            const yExtent = d3.extent(projectedData, d => d.y);
+
+            const xScale = d3.scaleLinear()
+                .domain([xExtent[0] - 0.5, xExtent[1] + 0.5])
+                .range([0, chartWidth]);
+
+            const yScale = d3.scaleLinear()
+                .domain([yExtent[0] - 0.5, yExtent[1] + 0.5])
+                .range([chartHeight, 0]);
+
+            // Add grid
+            g.append('g')
+                .attr('class', 'grid')
+                .call(d3.axisLeft(yScale)
+                    .tickSize(-chartWidth)
+                    .tickFormat(''));
+
+            g.append('g')
+                .attr('class', 'grid')
+                .attr('transform', `translate(0,${chartHeight})`)
+                .call(d3.axisBottom(xScale)
+                    .tickSize(-chartHeight)
+                    .tickFormat(''));
+
+            // Add axes
+            g.append('g')
+                .attr('class', 'axis')
+                .attr('transform', `translate(0,${chartHeight})`)
+                .call(d3.axisBottom(xScale).ticks(10));
+
+            g.append('g')
+                .attr('class', 'axis')
+                .call(d3.axisLeft(yScale).ticks(10));
+
+            // Add axis labels
+            svg.append('text')
+                .attr('x', width / 2)
+                .attr('y', height - 5)
+                .attr('text-anchor', 'middle')
+                .attr('fill', '#a0a8c0')
+                .attr('font-size', '12px')
+                .text('UMAP Dimension 1');
+
+            svg.append('text')
+                .attr('transform', 'rotate(-90)')
+                .attr('x', -height / 2)
+                .attr('y', 15)
+                .attr('text-anchor', 'middle')
+                .attr('fill', '#a0a8c0')
+                .attr('font-size', '12px')
+                .text('UMAP Dimension 2');
+
+            // Add zoom behavior
+            const zoom = d3.zoom()
+                .scaleExtent([0.5, 10])
+                .on('zoom', (event) => {
+                    g.attr('transform', `translate(${margin.left + event.transform.x},${margin.top + event.transform.y}) scale(${event.transform.k})`);
+                });
+
+            svg.call(zoom);
+
+            // Draw points
+            const tooltip = d3.select('#tooltip');
+
+            g.selectAll('.anchor-point')
+                .data(projectedData)
+                .join('circle')
+                .attr('class', d => d.pattern_id ? 'anchor-point' : 'anchor-point outlier')
+                .attr('cx', d => xScale(d.x))
+                .attr('cy', d => yScale(d.y))
+                .attr('r', 6)
+                .attr('fill', d => d.pattern_name ? colorScale(d.pattern_name) : '#666')
+                .on('mouseover', function(event, d) {
+                    // Enlarge point
+                    d3.select(this).attr('r', 8);
+
+                    // Show tooltip
+                    const timestamp = new Date(d.timestamp).toLocaleString();
+                    const patternInfo = d.pattern_name
+                        ? `<div class="tooltip-row"><span class="tooltip-label">Pattern:</span><span class="tooltip-value">${d.pattern_name}</span></div>
+                           <div class="tooltip-row"><span class="tooltip-label">Type:</span><span class="tooltip-value">${d.pattern_type || '-'}</span></div>`
+                        : '<div class="tooltip-row"><span class="tooltip-label">Pattern:</span><span class="tooltip-value">Outlier</span></div>';
+
+                    tooltip.html(`
+                        <div class="tooltip-row"><span class="tooltip-label">ID:</span><span class="tooltip-value">${d.id.substring(0, 8)}...</span></div>
+                        <div class="tooltip-row"><span class="tooltip-label">Location:</span><span class="tooltip-value">${d.location}</span></div>
+                        <div class="tooltip-row"><span class="tooltip-label">Time:</span><span class="tooltip-value">${timestamp}</span></div>
+                        ${patternInfo}
+                        <div class="tooltip-row"><span class="tooltip-label">Time of Day:</span><span class="tooltip-value">${d.time_of_day || '-'}</span></div>
+                        <div class="tooltip-row"><span class="tooltip-label">Day Type:</span><span class="tooltip-value">${d.day_type || '-'}</span></div>
+                        <div class="tooltip-row"><span class="tooltip-label">Weight:</span><span class="tooltip-value">${d.weight.toFixed(3)}</span></div>
+                    `)
+                    .classed('visible', true)
+                    .style('left', (event.pageX + 10) + 'px')
+                    .style('top', (event.pageY - 10) + 'px');
+                })
+                .on('mouseout', function() {
+                    d3.select(this).attr('r', 6);
+                    tooltip.classed('visible', false);
+                });
+
+            // Create legend
+            updateLegend();
+        }
+
+        // Update legend
+        function updateLegend() {
+            const legendDiv = document.getElementById('legend');
+
+            // Get unique patterns
+            const patterns = [...new Set(
+                anchorData.anchors
+                    .filter(a => a.pattern_name)
+                    .map(a => a.pattern_name)
+            )];
+
+            if (patterns.length === 0 && anchorData.stats.outlier_count === 0) {
+                legendDiv.style.display = 'none';
+                return;
+            }
+
+            let html = '<h3>Legend</h3><div class="legend-items">';
+
+            // Add pattern items
+            patterns.forEach(pattern => {
+                const color = colorScale(pattern);
+                html += `
+                    <div class="legend-item">
+                        <div class="pattern-color" style="background-color: ${color}"></div>
+                        <span>${pattern}</span>
+                    </div>
+                `;
+            });
+
+            // Add outlier item if present
+            if (anchorData.stats.outlier_count > 0) {
+                html += `
+                    <div class="legend-item">
+                        <div class="pattern-color" style="background-color: #666; border: 1px solid #888;"></div>
+                        <span>Outliers</span>
+                    </div>
+                `;
+            }
+
+            html += '</div>';
+            legendDiv.innerHTML = html;
+            legendDiv.style.display = 'block';
+        }
+
+        // Recompute button handler
+        document.getElementById('recompute-btn').addEventListener('click', async () => {
+            document.getElementById('recompute-btn').disabled = true;
+            await computeUmapAndVisualize();
+            document.getElementById('recompute-btn').disabled = false;
+        });
+
+        // Initial load
+        loadAndVisualize();
+    </script>
+</body>
+</html>
