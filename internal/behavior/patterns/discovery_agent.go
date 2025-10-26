@@ -16,9 +16,12 @@ import (
 
 // DiscoveryConfig configures pattern discovery behavior
 type DiscoveryConfig struct {
-	Interval      time.Duration // production: 24h, tests: triggered
-	MinAnchors    int           // minimum anchors needed (default: 10)
-	LookbackHours int           // how far back to analyze
+	Interval                    time.Duration // production: 24h, tests: triggered
+	MinAnchors                  int           // minimum anchors needed (default: 10)
+	LookbackHours               int           // how far back to analyze
+	TemporalGroupingEnabled     bool          // enable multi-stage clustering
+	TemporalGroupingWindow      time.Duration // window size for grouping
+	TemporalGroupingOverlapRatio float64       // overlap threshold for parallelism
 }
 
 // DiscoveryAgent orchestrates clustering and pattern interpretation
@@ -159,23 +162,139 @@ func (a *DiscoveryAgent) discoverPatterns(ctx context.Context, minAnchors, lookb
 
 	a.logger.Info("Clustering anchors", "count", len(anchors))
 
-	// Extract anchor IDs
-	anchorIDs := make([]uuid.UUID, len(anchors))
-	for i, anchor := range anchors {
-		anchorIDs[i] = anchor.ID
-	}
-
-	// Perform clustering
-	clusters, err := a.clustering.ClusterAnchors(ctx, anchorIDs)
-	if err != nil {
-		return fmt.Errorf("clustering failed: %w", err)
-	}
-
-	// Filter out noise cluster and small clusters
+	// Multi-stage clustering: check if temporal grouping is enabled
 	var validClusters []*clustering.Cluster
-	for _, cluster := range clusters {
-		if !cluster.Noise && len(cluster.Members) >= minAnchors {
-			validClusters = append(validClusters, cluster)
+
+	if a.config.TemporalGroupingEnabled {
+		// STAGE 1: Temporal Grouping
+		groups := GroupByTimeWindow(anchors, a.config.TemporalGroupingWindow)
+
+		a.logger.Info("Temporal grouping complete",
+			"groups_created", len(groups),
+			"window_size", a.config.TemporalGroupingWindow)
+
+		// STAGE 2 & 3: Detect parallelism and cluster adaptively
+		for i, group := range groups {
+			// Skip groups that are too small
+			if len(group.Anchors) < minAnchors {
+				a.logger.Debug("Skipping small temporal group",
+					"group_index", i,
+					"anchor_count", len(group.Anchors),
+					"required", minAnchors)
+				continue
+			}
+
+			// Detect parallelism
+			overlapThreshold := time.Duration(float64(a.config.TemporalGroupingWindow) * a.config.TemporalGroupingOverlapRatio)
+			isParallel := DetectParallelism(group, overlapThreshold)
+
+			locations := GetUniqueLocations(group)
+
+			a.logger.Info("Analyzing temporal group",
+				"group_index", i,
+				"anchor_count", len(group.Anchors),
+				"unique_locations", len(locations),
+				"is_parallel", isParallel,
+				"locations", locations)
+
+			if isParallel {
+				// Parallel activities: cluster each location separately
+				a.logger.Info("Splitting parallel group by location",
+					"group_index", i,
+					"locations", locations)
+
+				for _, location := range locations {
+					locationAnchors := FilterByLocation(group, location)
+
+					if len(locationAnchors) < minAnchors {
+						a.logger.Debug("Skipping location subset (too few anchors)",
+							"location", location,
+							"anchor_count", len(locationAnchors),
+							"required", minAnchors)
+						continue
+					}
+
+					a.logger.Info("Clustering location subset",
+						"location", location,
+						"anchor_count", len(locationAnchors))
+
+					// Extract anchor IDs for this location
+					anchorIDs := make([]uuid.UUID, len(locationAnchors))
+					for j, anchor := range locationAnchors {
+						anchorIDs[j] = anchor.ID
+					}
+
+					// Cluster this location
+					clusters, err := a.clustering.ClusterAnchors(ctx, anchorIDs)
+					if err != nil {
+						a.logger.Error("Clustering failed for location",
+							"location", location,
+							"error", err)
+						continue
+					}
+
+					// Filter valid clusters from this location
+					for _, cluster := range clusters {
+						if !cluster.Noise && len(cluster.Members) >= minAnchors {
+							validClusters = append(validClusters, cluster)
+						}
+					}
+				}
+			} else {
+				// Sequential activities: cluster normally
+				a.logger.Info("Clustering sequential group",
+					"group_index", i,
+					"anchor_count", len(group.Anchors))
+
+				// Extract anchor IDs
+				anchorIDs := make([]uuid.UUID, len(group.Anchors))
+				for j, anchor := range group.Anchors {
+					anchorIDs[j] = anchor.ID
+				}
+
+				// Cluster this group
+				clusters, err := a.clustering.ClusterAnchors(ctx, anchorIDs)
+				if err != nil {
+					a.logger.Error("Clustering failed for group",
+						"group_index", i,
+						"error", err)
+					continue
+				}
+
+				// Filter valid clusters
+				for _, cluster := range clusters {
+					if !cluster.Noise && len(cluster.Members) >= minAnchors {
+						validClusters = append(validClusters, cluster)
+					}
+				}
+			}
+		}
+
+		a.logger.Info("Multi-stage clustering complete",
+			"temporal_groups", len(groups),
+			"valid_clusters", len(validClusters))
+
+	} else {
+		// Original single-stage clustering (backward compatibility)
+		a.logger.Info("Using single-stage clustering (temporal grouping disabled)")
+
+		// Extract anchor IDs
+		anchorIDs := make([]uuid.UUID, len(anchors))
+		for i, anchor := range anchors {
+			anchorIDs[i] = anchor.ID
+		}
+
+		// Perform clustering
+		clusters, err := a.clustering.ClusterAnchors(ctx, anchorIDs)
+		if err != nil {
+			return fmt.Errorf("clustering failed: %w", err)
+		}
+
+		// Filter out noise cluster and small clusters
+		for _, cluster := range clusters {
+			if !cluster.Noise && len(cluster.Members) >= minAnchors {
+				validClusters = append(validClusters, cluster)
+			}
 		}
 	}
 

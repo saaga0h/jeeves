@@ -1,0 +1,359 @@
+name: "Parallel Activities - Movie and Bike Repair"
+description: "Multiple simultaneous activities: person watching movie in living room while another reads, then someone fixes bike in study"
+
+# Virtual time: ~1.5 hours compressed to 1.5 minutes real time
+test_mode:
+  virtual_start: "2025-10-25T19:00:00Z"  # Friday evening
+  time_scale: 60  # 60x speed - 1 real second = 1 virtual minute
+
+setup:
+  location: "universe"  # Track all locations
+  initial_state:
+    pattern_discovery_enabled: true
+    pattern_distance_strategy: "llm_first"
+
+events:
+  # === PARALLEL ACTIVITY 1: Movie watching in living room (19:00-20:30) ===
+
+  # Person A enters living room at 19:00
+  - time: 0
+    sensor: "motion:living_room"
+    value: true
+    description: "Person A enters living room"
+
+  - time: 5
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 80
+      color_temp: 4000
+      source: "automated"
+      timestamp: "2025-10-25T19:00:05Z"
+    description: "Living room lights turn on"
+
+  # Start movie
+  - time: 10
+    type: media
+    location: living_room
+    data:
+      state: "playing"
+      media_type: "video"
+      source: "apple_tv"
+      timestamp: "2025-10-25T19:00:10Z"
+    description: "Person A starts movie"
+
+  # Dim lights for movie
+  - time: 15
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 15
+      color_temp: 2700
+      source: "manual"
+      timestamp: "2025-10-25T19:00:15Z"
+    description: "Dim lights for movie watching"
+
+  # === PARALLEL ACTIVITY 2: Reading in living room (19:05-19:45) ===
+
+  # Person B enters living room at 19:05 (5 minutes after movie starts)
+  - time: 300
+    sensor: "motion:living_room"
+    value: true
+    description: "Person B enters living room to read"
+
+  # Turn on reading light
+  - time: 310
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 100
+      color_temp: 5000
+      source: "manual"
+      zone: "reading_corner"
+      timestamp: "2025-10-25T19:05:10Z"
+    description: "Person B turns on reading light"
+
+  # Occasional motion from reader
+  - time: 900   # 19:15 - 15 minutes later
+    sensor: "motion:living_room"
+    value: true
+    description: "Person B turns page/adjusts position"
+
+  - time: 1500  # 19:25 - 10 minutes later
+    sensor: "motion:living_room"
+    value: true
+    description: "Person B shifts in chair"
+
+  # Person B finishes reading and leaves at 19:45
+  - time: 2700  # 45 minutes into scenario
+    type: lighting
+    location: living_room
+    data:
+      state: "off"
+      zone: "reading_corner"
+      source: "manual"
+      timestamp: "2025-10-25T19:45:00Z"
+    description: "Person B turns off reading light"
+
+  # === MOVIE CONTINUES: Periodic motion from movie watcher ===
+
+  - time: 1800  # 19:30 - 30 minutes into movie
+    sensor: "motion:living_room"
+    value: true
+    description: "Person A adjusts position during movie"
+
+  - time: 3600  # 20:00 - 60 minutes into movie
+    sensor: "motion:living_room"
+    value: true
+    description: "Person A stretches during movie"
+
+  - time: 4500  # 20:15 - 75 minutes into movie
+    sensor: "motion:living_room"
+    value: true
+    description: "Person A shifts in seat"
+
+  # Movie ends at 20:30 (90 minutes total)
+  - time: 5400
+    type: media
+    location: living_room
+    data:
+      state: "stopped"
+      media_type: "video"
+      timestamp: "2025-10-25T20:30:00Z"
+    description: "Movie ends"
+
+  - time: 5410
+    type: lighting
+    location: living_room
+    data:
+      state: "on"
+      brightness: 80
+      color_temp: 4000
+      source: "automated"
+      timestamp: "2025-10-25T20:30:10Z"
+    description: "Lights return to normal brightness"
+
+  # === PARALLEL ACTIVITY 3: Bike repair in study (19:50-20:20) ===
+
+  # Person C enters study at 19:50 to fix bike
+  - time: 3000  # 50 minutes into scenario
+    sensor: "motion:study"
+    value: true
+    description: "Person C enters study with bike"
+
+  - time: 3005
+    type: lighting
+    location: study
+    data:
+      state: "on"
+      brightness: 100
+      color_temp: 5000
+      source: "manual"
+      timestamp: "2025-10-25T19:50:05Z"
+    description: "Turn on study lights for bike repair"
+
+  # Intermittent motion events during bike repair (~30 minutes of activity)
+  # These represent working on the bike - tightening, adjusting, testing
+
+  - time: 3120  # 19:52 - 2 minutes in
+    sensor: "motion:study"
+    value: true
+    description: "Working on bike - removing wheel"
+
+  - time: 3300  # 19:55 - 5 minutes in
+    sensor: "motion:study"
+    value: true
+    description: "Working on bike - inspecting chain"
+
+  - time: 3480  # 19:58 - 8 minutes in
+    sensor: "motion:study"
+    value: true
+    description: "Working on bike - adjusting brakes"
+
+  - time: 3600  # 20:00 - 10 minutes in
+    sensor: "motion:study"
+    value: true
+    description: "Working on bike - tightening bolts"
+
+  - time: 3780  # 20:03 - 13 minutes in
+    sensor: "motion:study"
+    value: true
+    description: "Working on bike - lubricating chain"
+
+  - time: 3960  # 20:06 - 16 minutes in
+    sensor: "motion:study"
+    value: true
+    description: "Working on bike - checking gears"
+
+  - time: 4140  # 20:09 - 19 minutes in
+    sensor: "motion:study"
+    value: true
+    description: "Working on bike - adjusting seat"
+
+  - time: 4320  # 20:12 - 22 minutes in
+    sensor: "motion:study"
+    value: true
+    description: "Working on bike - testing pedals"
+
+  - time: 4500  # 20:15 - 25 minutes in
+    sensor: "motion:study"
+    value: true
+    description: "Working on bike - final adjustments"
+
+  - time: 4680  # 20:18 - 28 minutes in
+    sensor: "motion:study"
+    value: true
+    description: "Working on bike - cleaning up tools"
+
+  # Finish bike repair at 20:20
+  - time: 4800  # 20:20 - 30 minutes total
+    type: lighting
+    location: study
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-25T20:20:00Z"
+    description: "Bike repair finished, turn off lights"
+
+  # === END OF ACTIVITIES ===
+
+  # Person A leaves living room at 20:32
+  - time: 5520
+    type: lighting
+    location: living_room
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-25T20:32:00Z"
+    description: "Person A leaves, turns off lights"
+
+  # === TRIGGER CONSOLIDATION ===
+  - time: 5700  # 20:35 - give time for activities to settle
+    type: behavior
+    location: universe
+    data:
+      action: "consolidate"
+      lookback_hours: 2
+    description: "Create episodes from all parallel activities"
+
+  # === TRIGGER DISTANCE COMPUTATION ===
+  - time: 5800
+    type: behavior
+    location: universe
+    data:
+      action: "compute_distances"
+      lookback_hours: 2
+    description: "Compute semantic distances between activity anchors"
+
+  # === TRIGGER PATTERN DISCOVERY ===
+  - time: 6400  # Give time for distance computation
+    type: behavior
+    location: universe
+    data:
+      action: "discover_patterns"
+      min_anchors: 3
+      lookback_hours: 2
+    description: "Discover patterns from parallel activities"
+
+wait:
+  - time: 6600
+    description: "Wait for pattern discovery to complete"
+
+expectations:
+  behavior_events:
+    # Consolidation should create multiple episodes for different locations
+    - time: 5750
+      topic: "automation/behavior/consolidation/completed"
+      payload:
+        macro_episodes_created: ">=2"  # At least living room and study episodes
+
+    # Distance computation
+    - time: 5900
+      topic: "automation/behavior/distance/completed"
+      payload:
+        distances_computed: ">=3"
+        strategy_used: "llm_first"
+
+    # Pattern discovery might find patterns if there's enough similarity
+    - time: 6500
+      topic: "automation/behavior/patterns/discovered"
+      payload:
+        clusters_analyzed: ">=1"
+
+  postgres:
+    # Verify semantic anchors created for all activities
+    - time: 6600
+      postgres_query: "SELECT COUNT(*) FROM semantic_anchors"
+      postgres_expected: ">=3"  # At least one anchor per major activity
+      description: "Semantic anchors created for parallel activities"
+
+    # Verify anchors have correct 128D embeddings
+    - time: 6600
+      postgres_query: |
+        SELECT COUNT(*) FROM semantic_anchors
+        WHERE vector_dims(semantic_embedding) = 128
+      postgres_expected: ">=3"
+      description: "All anchors have 128-dimensional embeddings"
+
+    # Verify multiple locations captured
+    - time: 6600
+      postgres_query: |
+        SELECT COUNT(DISTINCT location) FROM semantic_anchors
+        WHERE timestamp >= '2025-10-25T19:00:00Z'
+      postgres_expected: ">=2"
+      description: "Multiple locations active (living_room, study)"
+
+    # Verify anchor context captures time of day
+    - time: 6600
+      postgres_query: |
+        SELECT COUNT(*) FROM semantic_anchors
+        WHERE context->>'time_of_day' = 'evening'
+      postgres_expected: ">=2"
+      description: "Anchors tagged with evening time context"
+
+    # Verify episodes created for parallel activities
+    - time: 6600
+      postgres_query: |
+        SELECT COUNT(*) FROM behavioral_episodes
+        WHERE start_time >= '2025-10-25T19:00:00Z'
+      postgres_expected: ">=2"
+      description: "Episodes created for living room and study activities"
+
+    # Verify living room episode captured movie watching
+    - time: 6600
+      postgres_query: |
+        SELECT COUNT(*) FROM behavioral_episodes
+        WHERE jsonld->>'jeeves:location' = 'living_room'
+          AND start_time >= '2025-10-25T19:00:00Z'
+      postgres_expected: ">=1"
+      description: "Living room episode captured"
+
+    # Verify study episode captured bike repair
+    - time: 6600
+      postgres_query: |
+        SELECT COUNT(*) FROM behavioral_episodes
+        WHERE jsonld->>'jeeves:location' = 'study'
+          AND start_time >= '2025-10-25T19:50:00Z'
+      postgres_expected: ">=1"
+      description: "Study episode captured bike repair activity"
+
+    # Verify anchor distances computed
+    - time: 6600
+      postgres_query: "SELECT COUNT(*) FROM anchor_distances"
+      postgres_expected: ">=3"
+      description: "Semantic distances computed between activity anchors"
+
+    # Verify learned distances library populated
+    - time: 6600
+      postgres_query: "SELECT COUNT(*) FROM learned_distances"
+      postgres_expected: ">=1"
+      description: "Learned distance library populated from parallel activities"
+
+    # Check for patterns (may or may not find patterns from single occurrence)
+    - time: 6600
+      postgres_query: "SELECT COUNT(*) FROM behavioral_patterns"
+      postgres_expected: ">=0"
+      description: "Pattern discovery completed (patterns optional for single occurrence)"

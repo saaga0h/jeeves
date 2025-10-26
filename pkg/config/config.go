@@ -82,6 +82,11 @@ type Config struct {
 	PatternClusteringMinPoints    int
 	PatternMinAnchorsForDiscovery int
 	PatternLookbackHours          int
+
+	// Temporal Grouping configuration
+	TemporalGroupingEnabled       bool
+	TemporalGroupingWindowMinutes int     // Window size in minutes for temporal grouping
+	TemporalGroupingOverlapRatio  float64 // Overlap threshold (0.0-1.0) for parallelism detection
 }
 
 // NewConfig creates a new Config with default values
@@ -142,6 +147,10 @@ func NewConfig() *Config {
 		PatternClusteringMinPoints:    3,
 		PatternMinAnchorsForDiscovery: 10,
 		PatternLookbackHours:          168, // 7 days
+		// Temporal Grouping defaults
+		TemporalGroupingEnabled:       true,
+		TemporalGroupingWindowMinutes: 5,   // 5 minute window
+		TemporalGroupingOverlapRatio:  0.5, // 50% overlap = parallel
 	}
 }
 
@@ -375,6 +384,23 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("JEEVES_PATTERN_LOOKBACK_HOURS"); v != "" {
 		if hours, err := strconv.Atoi(v); err == nil {
 			c.PatternLookbackHours = hours
+		}
+	}
+
+	// Temporal Grouping configuration
+	if v := os.Getenv("JEEVES_TEMPORAL_GROUPING_ENABLED"); v != "" {
+		if enabled, err := strconv.ParseBool(v); err == nil {
+			c.TemporalGroupingEnabled = enabled
+		}
+	}
+	if v := os.Getenv("JEEVES_TEMPORAL_GROUPING_WINDOW_MINUTES"); v != "" {
+		if minutes, err := strconv.Atoi(v); err == nil {
+			c.TemporalGroupingWindowMinutes = minutes
+		}
+	}
+	if v := os.Getenv("JEEVES_TEMPORAL_GROUPING_OVERLAP_RATIO"); v != "" {
+		if ratio, err := strconv.ParseFloat(v, 64); err == nil {
+			c.TemporalGroupingOverlapRatio = ratio
 		}
 	}
 }
