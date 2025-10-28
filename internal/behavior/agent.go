@@ -121,6 +121,7 @@ func (a *Agent) initializePatternDiscovery() error {
 		llmClient,
 		a.mqtt,
 		a.logger,
+		a.timeManager,
 	)
 
 	// Initialize clustering engine
@@ -158,6 +159,7 @@ func (a *Agent) initializePatternDiscovery() error {
 		a.patternInterpreter,
 		a.mqtt,
 		a.logger,
+		a.timeManager,
 	)
 
 	a.logger.Info("Pattern discovery system initialized successfully")

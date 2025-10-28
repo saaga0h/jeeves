@@ -14,6 +14,12 @@ import (
 	"github.com/saaga0h/jeeves-platform/pkg/mqtt"
 )
 
+// TimeManager interface for getting current time (real or virtual)
+type TimeManager interface {
+	Now() time.Time
+	IsTestMode() bool
+}
+
 // DiscoveryConfig configures pattern discovery behavior
 type DiscoveryConfig struct {
 	Interval                    time.Duration // production: 24h, tests: triggered
@@ -32,6 +38,7 @@ type DiscoveryAgent struct {
 	interpreter *PatternInterpreter
 	mqtt        mqtt.Client
 	logger      *slog.Logger
+	timeManager TimeManager
 
 	// Test mode support
 	testMode     bool
@@ -52,6 +59,7 @@ func NewDiscoveryAgent(
 	interpreter *PatternInterpreter,
 	mqttClient mqtt.Client,
 	logger *slog.Logger,
+	timeManager TimeManager,
 ) *DiscoveryAgent {
 	return &DiscoveryAgent{
 		config:       config,
@@ -60,6 +68,7 @@ func NewDiscoveryAgent(
 		interpreter:  interpreter,
 		mqtt:         mqttClient,
 		logger:       logger,
+		timeManager:  timeManager,
 		testTriggers: make(chan TriggerEvent, 10),
 	}
 }
@@ -139,14 +148,14 @@ func (a *DiscoveryAgent) handleTrigger(msg mqtt.Message) {
 
 // discoverPatterns performs pattern discovery from recent anchors
 func (a *DiscoveryAgent) discoverPatterns(ctx context.Context, minAnchors, lookbackHours int) error {
-	startTime := time.Now()
+	startTime := a.timeManager.Now()
 
 	a.logger.Info("Starting pattern discovery",
 		"min_anchors", minAnchors,
 		"lookback_hours", lookbackHours)
 
 	// Get recent anchors with computed distances
-	since := time.Now().Add(-time.Duration(lookbackHours) * time.Hour)
+	since := a.timeManager.Now().Add(-time.Duration(lookbackHours) * time.Hour)
 	anchors, err := a.storage.GetAnchorsWithDistances(ctx, since)
 	if err != nil {
 		return fmt.Errorf("failed to get anchors: %w", err)

@@ -17,6 +17,12 @@ import (
 	"github.com/saaga0h/jeeves-platform/pkg/mqtt"
 )
 
+// TimeManager interface for getting current time (real or virtual)
+type TimeManager interface {
+	Now() time.Time
+	IsTestMode() bool
+}
+
 // ComputationConfig configures distance computation behavior
 type ComputationConfig struct {
 	Strategy      string        // "llm_first", "learned_first", "vector_first"
@@ -28,11 +34,12 @@ type ComputationConfig struct {
 
 // ComputationAgent computes semantic distances between anchor pairs
 type ComputationAgent struct {
-	config  ComputationConfig
-	storage *storage.AnchorStorage
-	llm     llm.Client
-	mqtt    mqtt.Client
-	logger  *slog.Logger
+	config      ComputationConfig
+	storage     *storage.AnchorStorage
+	llm         llm.Client
+	mqtt        mqtt.Client
+	logger      *slog.Logger
+	timeManager TimeManager
 
 	// Test mode support
 	testMode     bool
@@ -55,6 +62,7 @@ func NewComputationAgent(
 	llmClient llm.Client,
 	mqttClient mqtt.Client,
 	logger *slog.Logger,
+	timeManager TimeManager,
 ) *ComputationAgent {
 	return &ComputationAgent{
 		config:           config,
@@ -62,6 +70,7 @@ func NewComputationAgent(
 		llm:              llmClient,
 		mqtt:             mqttClient,
 		logger:           logger,
+		timeManager:      timeManager,
 		testTriggers:     make(chan TriggerEvent, 10),
 		learnedDistances: make(map[string]float64),
 	}
@@ -142,7 +151,7 @@ func (a *ComputationAgent) handleTrigger(msg mqtt.Message) {
 
 // computeDistances performs batch distance computation
 func (a *ComputationAgent) computeDistances(ctx context.Context, lookbackHours int) error {
-	startTime := time.Now()
+	startTime := a.timeManager.Now()
 
 	a.logger.Info("Starting distance computation",
 		"lookback_hours", lookbackHours,
@@ -150,7 +159,7 @@ func (a *ComputationAgent) computeDistances(ctx context.Context, lookbackHours i
 		"batch_size", a.config.BatchSize)
 
 	// Get anchor pairs needing distances
-	since := time.Now().Add(-time.Duration(lookbackHours) * time.Hour)
+	since := a.timeManager.Now().Add(-time.Duration(lookbackHours) * time.Hour)
 	pairs, err := a.storage.GetAnchorsNeedingDistances(ctx, a.config.BatchSize)
 	if err != nil {
 		return fmt.Errorf("failed to get anchor pairs: %w", err)
@@ -206,7 +215,7 @@ func (a *ComputationAgent) computeDistances(ctx context.Context, lookbackHours i
 			Anchor2ID:  pair[1],
 			Distance:   distance,
 			Source:     source,
-			ComputedAt: time.Now(),
+			ComputedAt: a.timeManager.Now(),
 		}
 
 		if err := a.storage.StoreDistance(ctx, distanceRecord); err != nil {
