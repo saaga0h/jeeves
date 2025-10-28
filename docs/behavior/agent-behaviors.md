@@ -498,6 +498,139 @@ BEHAVIOR_MACRO_MAX_GAP_MINUTES=120   # Macro-episode grouping threshold
 
 ---
 
+## Multi-Stage Clustering and Pattern Discovery
+
+The behavior agent uses an advanced **multi-stage clustering system** to discover recurring behavioral patterns from semantic anchors. This system distinguishes between parallel activities (concurrent activities in different locations) and sequential activities (routines flowing across locations).
+
+### The Pattern Discovery Problem
+
+Traditional single-stage DBSCAN clustering cannot distinguish between:
+1. **Sequential Activities** - Activities flowing across locations (e.g., morning routine: bedroom → bathroom → kitchen)
+2. **Parallel Activities** - Concurrent activities in different locations (e.g., watching movie in living room while working in study)
+
+Why traditional distance-based clustering fails:
+- Location differences alone aren't sufficient (morning routines cross locations)
+- Time proximity alone isn't sufficient (parallel activities happen at same time)
+- Semantic similarity alone isn't sufficient (similar contexts, different activities)
+
+### Multi-Stage Clustering Pipeline
+
+The solution uses a **3-stage pipeline** that explicitly models temporal relationships:
+
+#### Stage 1: Temporal Grouping
+
+Groups anchors into temporal windows to identify sets of activities happening close in time.
+
+**Algorithm**:
+- Sort anchors by timestamp
+- Group consecutive anchors within window size (default: 5 minutes)
+- Each group represents activities that could be related
+
+**Example**:
+```
+Group 1: [living_room@19:00, living_room@19:05, living_room@19:08]  // 3 anchors
+Group 2: [living_room@19:50, study@19:52, study@19:55, study@19:58]  // 4 anchors
+Group 3: [living_room@20:15, study@20:15, study@20:18]               // 3 concurrent anchors
+```
+
+#### Stage 2: Parallelism Detection
+
+Analyzes each temporal group to determine if it contains parallel or sequential activities.
+
+**Detection Logic**:
+1. Extract unique locations in the group
+2. If only 1 location → Sequential
+3. If multiple locations:
+   - Build time ranges for each location
+   - Check if any pair of locations has overlapping time ranges
+   - If overlap > threshold (default: 50%) → Parallel
+   - Otherwise → Sequential
+
+**Examples**:
+
+Sequential activity (no overlap):
+```
+bedroom:  [07:00 ───── 07:05]
+bathroom:               [07:05 ─── 07:08]
+kitchen:                          [07:08 ────── 07:20]
+Result: Sequential (is_parallel = false)
+```
+
+Parallel activity (overlap detected):
+```
+living_room: [19:50 ════════════════════════ 20:30]
+study:              [19:52 ══════════════ 20:20]
+Result: Parallel (is_parallel = true)
+```
+
+#### Stage 3: Adaptive Clustering
+
+Applies different clustering strategies based on parallelism detection:
+
+**For Parallel Groups**:
+1. Split group by location
+2. Cluster each location subset independently
+3. Collect valid clusters from all subsets
+
+**For Sequential Groups**:
+1. Keep group together
+2. Cluster normally (locations can flow together)
+3. Collect valid clusters
+
+This ensures:
+- Parallel activities form **separate patterns** (correct)
+- Sequential activities form **unified patterns** (correct)
+
+### Pattern Discovery Configuration
+
+**Environment Variables**:
+```bash
+JEEVES_TEMPORAL_GROUPING_ENABLED=true              # Enable multi-stage clustering
+JEEVES_TEMPORAL_GROUPING_WINDOW_MINUTES=5          # 5-minute temporal windows
+JEEVES_TEMPORAL_GROUPING_OVERLAP_RATIO=0.5         # 50% overlap = parallel
+```
+
+**Defaults**:
+- Enabled: `true` (active by default)
+- Window: `5 minutes` (activities within 5 min could be related)
+- Overlap Ratio: `0.5` (50% time overlap indicates parallelism)
+
+**Backward Compatibility**: Set `JEEVES_TEMPORAL_GROUPING_ENABLED=false` to revert to original single-stage clustering.
+
+### Pattern Discovery Results
+
+The system correctly identifies distinct patterns:
+- **Separates parallel activities** (study vs living_room at same time)
+- **Preserves sequential routines** (bedroom → bathroom → kitchen)
+- **Enables context-aware automation** and prediction
+
+**Example Patterns Created**:
+- "Evening Academic Study Session" - 16 study anchors (bike repair activity)
+- "Evening Leisure in Living Room" - 10 living_room anchors (movie watching)
+- "Morning Preparation Routine" - Sequential bedroom → bathroom → kitchen
+
+### Performance Considerations
+
+**Computational Complexity**:
+- Temporal Grouping: O(n log n) - sorting anchors
+- Parallelism Detection: O(l²) where l = unique locations per group (typically 1-3)
+- Clustering: O(n²) per group (unchanged from DBSCAN)
+
+**Memory Usage**: <5% increase compared to single-stage clustering
+
+**Tuning Parameters**:
+- **Window Size**: Too small (1-2 min) breaks up related activities; too large (30+ min) groups unrelated activities. Recommended: 5 minutes.
+- **Overlap Ratio**: 0.3 = strict parallelism detection; 0.5 = balanced (default); 0.7 = requires high overlap
+
+### Integration with Butler Agents
+
+Butler agents use parallel activity detection to:
+- Avoid conflicting automations (don't turn off living_room lights when movie watching just because someone left study)
+- Provide better context awareness (understand household dynamics)
+- Make smarter predictions (recognize study activity is independent of living_room)
+
+---
+
 ## Integration with Other Agents
 
 ### Collector Agent

@@ -1,8 +1,8 @@
-# Semantic Anchors System - Integration Guide
+# Semantic Anchors System
 
 ## Overview
 
-Phase 3 implementation is complete. The semantic anchor system creates 128-dimensional vector embeddings for behavioral events, enabling flexible pattern recognition beyond fixed episode boundaries.
+The semantic anchor system creates 128-dimensional vector embeddings for behavioral events, enabling flexible pattern recognition beyond fixed episode boundaries.
 
 ## Files Created
 
@@ -312,15 +312,17 @@ if lastTime, exists := a.lastAnchorTime[event.Location]; exists {
 a.lastAnchorTime[event.Location] = event.Timestamp
 ```
 
-## Next Steps (Phase 4)
+## Next Steps (Phase 4) - COMPLETED
 
-Future enhancements not yet implemented:
+Phase 4 pattern discovery has been implemented:
 
-1. **Pattern Discovery** - Cluster similar anchors to discover patterns
-2. **Learned Features** - Update dimensions `[96-127]` with learned embeddings
-3. **Prediction** - Use weight-based patterns for activity prediction
-4. **LLM Integration** - Use LLM to compute semantic distances for complex patterns
-5. **Anchor Spawning** - Create secondary anchors for parallel activities
+1. ✅ **Pattern Discovery** - DBSCAN clustering with multi-stage pipeline
+2. ✅ **LLM Integration** - LLM-computed semantic distances for complex patterns
+3. ✅ **Multi-Stage Clustering** - Detects and separates parallel activities
+4. ⏳ **Learned Features** - Update dimensions `[96-127]` with learned embeddings (future)
+5. ⏳ **Prediction** - Use weight-based patterns for activity prediction (future)
+
+**See**: The "Multi-Stage Clustering and Pattern Discovery" section in [agent-behaviors.md](agent-behaviors.md) for details on parallel activity detection.
 
 ## Troubleshooting
 
