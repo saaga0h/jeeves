@@ -195,7 +195,8 @@ func (s *AnchorStorage) FindSimilarAnchors(ctx context.Context, embedding pgvect
 }
 
 // GetAnchorsNeedingDistances finds pairs of anchors that don't have pre-computed distances yet.
-// Returns anchor pairs that need distance computation, limited by the specified count.
+// Uses smart filtering to only consider semantically related pairs (same/adjacent locations, time windows, day types).
+// This reduces the O(n²) problem to ~O(n×k) where k is average neighbors per anchor (~10-50).
 func (s *AnchorStorage) GetAnchorsNeedingDistances(ctx context.Context, limit int) ([][2]uuid.UUID, error) {
 	query := `
 		SELECT a1.id, a2.id
@@ -207,6 +208,26 @@ func (s *AnchorStorage) GetAnchorsNeedingDistances(ctx context.Context, limit in
 			FROM anchor_distances ad
 			WHERE (ad.anchor1_id = a1.id AND ad.anchor2_id = a2.id)
 			   OR (ad.anchor1_id = a2.id AND ad.anchor2_id = a1.id)
+		  )
+		  -- FILTER 1: Same or adjacent locations (reduces pairs by ~80%)
+		  AND (
+			a1.location = a2.location
+			OR (a1.location IN ('bedroom', 'bathroom') AND a2.location IN ('bedroom', 'bathroom'))
+			OR (a1.location IN ('kitchen', 'dining_room') AND a2.location IN ('kitchen', 'dining_room'))
+			OR (a1.location IN ('living_room', 'dining_room') AND a2.location IN ('living_room', 'dining_room'))
+			OR (a1.location IN ('living_room', 'study') AND a2.location IN ('living_room', 'study'))
+		  )
+		  -- FILTER 2: Within 2-hour time window (tighter temporal proximity)
+		  AND ABS(EXTRACT(EPOCH FROM (a1.timestamp - a2.timestamp))) < 7200
+		  -- FILTER 3: Same day type (weekend vs weekday)
+		  AND (a1.context->>'day_type') = (a2.context->>'day_type')
+		  -- FILTER 4: Same or adjacent time of day
+		  AND (
+			(a1.context->>'time_of_day') = (a2.context->>'time_of_day')
+			OR ((a1.context->>'time_of_day') = 'morning' AND (a2.context->>'time_of_day') = 'afternoon')
+			OR ((a1.context->>'time_of_day') = 'afternoon' AND (a2.context->>'time_of_day') = 'morning')
+			OR ((a1.context->>'time_of_day') = 'afternoon' AND (a2.context->>'time_of_day') = 'evening')
+			OR ((a1.context->>'time_of_day') = 'evening' AND (a2.context->>'time_of_day') = 'afternoon')
 		  )
 		ORDER BY a1.created_at DESC, a2.created_at DESC
 		LIMIT $1

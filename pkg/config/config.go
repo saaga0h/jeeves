@@ -149,7 +149,7 @@ func NewConfig() *Config {
 		PatternLookbackHours:          168, // 7 days
 		// Temporal Grouping defaults
 		TemporalGroupingEnabled:       true,
-		TemporalGroupingWindowMinutes: 5,   // 5 minute window
+		TemporalGroupingWindowMinutes: 60,  // 60 minute window (better for longer activities)
 		TemporalGroupingOverlapRatio:  0.5, // 50% overlap = parallel
 	}
 }

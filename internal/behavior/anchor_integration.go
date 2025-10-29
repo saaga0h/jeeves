@@ -267,9 +267,13 @@ func (a *Agent) createAnchorsDirectlyFromSensorEvents(ctx context.Context, since
 		}
 	}
 
-	// Track last motion anchor time per location to avoid creating too many
+	// Track last significant state per location to avoid redundant anchors
+	// Redis would be better for production, but using in-memory for now
 	lastMotionAnchor := make(map[string]time.Time)
-	minMotionGap := 2 * time.Minute // Create motion anchor only if >2 minutes since last
+	lastLightingState := make(map[string]map[string]interface{}) // location -> {state, brightness}
+	lastMediaState := make(map[string]string)                     // location -> state (playing/stopped)
+
+	minMotionGap := 5 * time.Minute // Motion: Only create if >5 min gap
 
 	anchorsCreated := 0
 
@@ -280,7 +284,9 @@ func (a *Agent) createAnchorsDirectlyFromSensorEvents(ctx context.Context, since
 		switch event.Type {
 		case "motion":
 			if event.State == "on" {
-				// Check time since last motion anchor in this location
+				// Only create anchor if:
+				// 1. First motion in location, OR
+				// 2. >5 minutes since last motion anchor
 				lastTime, exists := lastMotionAnchor[event.Location]
 				if !exists || event.Timestamp.Sub(lastTime) > minMotionGap {
 					shouldCreateAnchor = true
@@ -289,12 +295,29 @@ func (a *Agent) createAnchorsDirectlyFromSensorEvents(ctx context.Context, since
 			}
 
 		case "lighting":
-			// Always create anchor for lighting state changes
-			shouldCreateAnchor = true
+			// Only create anchor for lighting STATE changes (on/off)
+			// Skip redundant events with same state
+			lastState, exists := lastLightingState[event.Location]
+			if !exists {
+				// First lighting event in location
+				shouldCreateAnchor = true
+				lastLightingState[event.Location] = a.buildSignalValue(event)
+			} else {
+				// Only create anchor if state actually changed
+				if lastState["state"] != event.State {
+					shouldCreateAnchor = true
+					lastLightingState[event.Location] = a.buildSignalValue(event)
+				}
+			}
 
 		case "media":
-			// Always create anchor for media events
-			shouldCreateAnchor = true
+			// Only create anchor for state changes (playing ↔ stopped)
+			// Skip redundant "still playing" events
+			lastState, exists := lastMediaState[event.Location]
+			if !exists || lastState != event.State {
+				shouldCreateAnchor = true
+				lastMediaState[event.Location] = event.State
+			}
 		}
 
 		if !shouldCreateAnchor {

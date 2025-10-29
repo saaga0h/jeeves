@@ -25,7 +25,7 @@ type TimeManager interface {
 
 // ComputationConfig configures distance computation behavior
 type ComputationConfig struct {
-	Strategy      string        // "llm_first", "learned_first", "vector_first"
+	Strategy      string        // "llm_first", "learned_first", "vector_first", "hybrid", "progressive_learned"
 	Model         string        // LLM model name (e.g., "mixtral:8x7b")
 	Interval      time.Duration // production: 6h, tests: triggered
 	BatchSize     int           // default: 100
@@ -48,6 +48,11 @@ type ComputationAgent struct {
 	// Learned distance patterns
 	learnedDistances map[string]float64
 	learnedMutex     sync.RWMutex
+
+	// Progressive learned tracking
+	patternObservations map[string][]float64 // Track multiple observations for confidence
+	uncertainQueue      [][2]*types.SemanticAnchor
+	totalComputations   int // Track how many computations we've done
 }
 
 // TriggerEvent represents a manual trigger for distance computation
@@ -65,14 +70,16 @@ func NewComputationAgent(
 	timeManager TimeManager,
 ) *ComputationAgent {
 	return &ComputationAgent{
-		config:           config,
-		storage:          storage,
-		llm:              llmClient,
-		mqtt:             mqttClient,
-		logger:           logger,
-		timeManager:      timeManager,
-		testTriggers:     make(chan TriggerEvent, 10),
-		learnedDistances: make(map[string]float64),
+		config:              config,
+		storage:             storage,
+		llm:                 llmClient,
+		mqtt:                mqttClient,
+		logger:              logger,
+		timeManager:         timeManager,
+		testTriggers:        make(chan TriggerEvent, 10),
+		learnedDistances:    make(map[string]float64),
+		patternObservations: make(map[string][]float64),
+		uncertainQueue:      make([][2]*types.SemanticAnchor, 0),
 	}
 }
 
@@ -270,6 +277,14 @@ func (a *ComputationAgent) computeDistance(
 		// Fast path: always use vector distance
 		return a.computeVectorDistance(anchor1, anchor2)
 
+	case "hybrid":
+		// Hybrid: Use vector for most cases, LLM for ambiguous ones
+		return a.computeHybridDistance(ctx, anchor1, anchor2)
+
+	case "progressive_learned":
+		// Progressive: Build learned model through strategic LLM sampling
+		return a.computeProgressiveLearnedDistance(ctx, anchor1, anchor2)
+
 	default:
 		return 0, "", fmt.Errorf("unknown strategy: %s", a.config.Strategy)
 	}
@@ -304,6 +319,355 @@ func cosineDist(v1, v2 pgvector.Vector) float64 {
 	// Clamp to [0, 1] to handle floating point errors
 	distance := 1.0 - dot
 	return math.Max(0, math.Min(1, distance))
+}
+
+// computeHybridDistance uses vector for clear cases, LLM for ambiguous ones
+func (a *ComputationAgent) computeHybridDistance(
+	ctx context.Context,
+	anchor1, anchor2 *types.SemanticAnchor,
+) (float64, string, error) {
+
+	// Always compute vector distance first (it's fast)
+	vectorDist := cosineDist(anchor1.SemanticEmbedding, anchor2.SemanticEmbedding)
+
+	sameLocation := anchor1.Location == anchor2.Location
+
+	// CASE 1: Same location
+	if sameLocation {
+		// Very similar (< 0.15) - clearly same activity pattern
+		if vectorDist < 0.15 {
+			a.logger.Debug("Hybrid: same location, very similar - using vector",
+				"anchor1", anchor1.ID, "anchor2", anchor2.ID,
+				"vector_dist", vectorDist)
+			return vectorDist, "vector", nil
+		}
+
+		// Very different (> 0.35) - clearly different activities
+		if vectorDist > 0.35 {
+			a.logger.Debug("Hybrid: same location, very different - using vector",
+				"anchor1", anchor1.ID, "anchor2", anchor2.ID,
+				"vector_dist", vectorDist)
+			return vectorDist, "vector", nil
+		}
+
+		// Borderline case (0.15-0.35) - use LLM for semantic understanding
+		// This handles cases like "same location, different time of day"
+		a.logger.Debug("Hybrid: same location, borderline - using LLM",
+			"anchor1", anchor1.ID, "anchor2", anchor2.ID,
+			"vector_dist", vectorDist)
+		return a.computeLLMDistance(ctx, anchor1, anchor2)
+	}
+
+	// CASE 2: Different locations
+	// Very different (> 0.5) - clearly parallel/unrelated activities
+	if vectorDist > 0.5 {
+		a.logger.Debug("Hybrid: different locations, clearly different - using vector",
+			"anchor1", anchor1.ID, "anchor2", anchor2.ID,
+			"vector_dist", vectorDist)
+		return vectorDist, "vector", nil
+	}
+
+	// Might be sequential routine (e.g., kitchen → dining_room)
+	// Use LLM to understand routine flow
+	if isAdjacentLocations(anchor1.Location, anchor2.Location) {
+		a.logger.Debug("Hybrid: adjacent locations, potential routine - using LLM",
+			"anchor1", anchor1.ID, "anchor2", anchor2.ID,
+			"locations", anchor1.Location+"/"+anchor2.Location)
+		return a.computeLLMDistance(ctx, anchor1, anchor2)
+	}
+
+	// Default: use vector for different locations
+	a.logger.Debug("Hybrid: different locations - using vector",
+		"anchor1", anchor1.ID, "anchor2", anchor2.ID,
+		"vector_dist", vectorDist)
+	return vectorDist, "vector", nil
+}
+
+// isAdjacentLocations checks if two locations are typically part of sequential routines
+func isAdjacentLocations(loc1, loc2 string) bool {
+	// Define location pairs that often appear in routines
+	adjacentPairs := map[string][]string{
+		"bedroom":     {"bathroom", "kitchen"},
+		"bathroom":    {"bedroom", "kitchen"},
+		"kitchen":     {"dining_room", "bedroom", "bathroom"},
+		"dining_room": {"kitchen", "living_room"},
+		"living_room": {"dining_room", "study"},
+		"study":       {"living_room"},
+	}
+
+	if neighbors, ok := adjacentPairs[loc1]; ok {
+		for _, neighbor := range neighbors {
+			if neighbor == loc2 {
+				return true
+			}
+		}
+	}
+
+	if neighbors, ok := adjacentPairs[loc2]; ok {
+		for _, neighbor := range neighbors {
+			if neighbor == loc1 {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// computeProgressiveLearnedDistance implements progressive learning strategy
+func (a *ComputationAgent) computeProgressiveLearnedDistance(
+	ctx context.Context,
+	anchor1, anchor2 *types.SemanticAnchor,
+) (float64, string, error) {
+	a.learnedMutex.Lock()
+	a.totalComputations++
+	currentTotal := a.totalComputations
+	a.learnedMutex.Unlock()
+
+	// PHASE 1: Initial seeding (first ~50 computations)
+	// Use strategic sampling to build learned model
+	if currentTotal <= 50 {
+		if a.shouldSampleForLearning(anchor1, anchor2) {
+			a.logger.Debug("Progressive: Phase 1 - LLM seeding",
+				"computation", currentTotal,
+				"anchor1", anchor1.ID,
+				"anchor2", anchor2.ID)
+
+			dist, _, err := a.computeLLMDistance(ctx, anchor1, anchor2)
+			if err == nil {
+				a.recordObservation(anchor1, anchor2, dist)
+				return dist, "llm_seed", nil
+			}
+			// Fallback to vector if LLM fails
+			a.logger.Warn("LLM failed during seeding, using vector", "error", err)
+			return a.computeVectorDistance(anchor1, anchor2)
+		}
+
+		// Not selected for sampling, use vector
+		dist, _, err := a.computeVectorDistance(anchor1, anchor2)
+		return dist, "vector", err
+	}
+
+	// PHASE 2: Learned model usage (51-400 computations)
+	// Use learned patterns with confidence scoring
+	if currentTotal <= 400 {
+		if dist, confidence := a.getLearnedDistanceWithConfidence(anchor1, anchor2); dist != nil {
+			if confidence >= 0.7 {
+				// High confidence - use learned distance
+				a.logger.Debug("Progressive: Phase 2 - high confidence learned",
+					"computation", currentTotal,
+					"confidence", confidence,
+					"distance", *dist)
+				return *dist, "learned", nil
+			}
+
+			// Medium confidence - queue for verification but use learned for now
+			a.logger.Debug("Progressive: Phase 2 - medium confidence, queuing",
+				"computation", currentTotal,
+				"confidence", confidence)
+			a.queueForVerification(anchor1, anchor2)
+			return *dist, "learned_uncertain", nil
+		}
+
+		// No learned pattern - compute with LLM and learn
+		a.logger.Debug("Progressive: Phase 2 - new pattern, using LLM",
+			"computation", currentTotal)
+		dist, _, err := a.computeLLMDistance(ctx, anchor1, anchor2)
+		if err == nil {
+			a.recordObservation(anchor1, anchor2, dist)
+			return dist, "llm", nil
+		}
+
+		// Fallback to vector
+		return a.computeVectorDistance(anchor1, anchor2)
+	}
+
+	// PHASE 3: Verification phase (400+ computations)
+	// Process queued uncertain cases with LLM
+	if currentTotal > 400 && len(a.uncertainQueue) > 0 {
+		// Check if current pair is in uncertain queue
+		if a.isInUncertainQueue(anchor1, anchor2) {
+			a.logger.Debug("Progressive: Phase 3 - verifying queued pair",
+				"computation", currentTotal,
+				"queue_size", len(a.uncertainQueue))
+			dist, _, err := a.computeLLMDistance(ctx, anchor1, anchor2)
+			if err == nil {
+				a.recordObservation(anchor1, anchor2, dist)
+				a.removeFromUncertainQueue(anchor1, anchor2)
+				return dist, "llm_verify", nil
+			}
+		}
+	}
+
+	// Default: use learned with fallback to vector
+	if dist := a.getLearnedDistance(anchor1, anchor2); dist != nil {
+		return *dist, "learned", nil
+	}
+
+	return a.computeVectorDistance(anchor1, anchor2)
+}
+
+// shouldSampleForLearning determines if a pair should be sampled for LLM learning
+func (a *ComputationAgent) shouldSampleForLearning(anchor1, anchor2 *types.SemanticAnchor) bool {
+	// Strategic sampling to cover diverse patterns:
+	// 1. Different location pairs (kitchen→dining, bedroom→bathroom, etc.)
+	// 2. Time boundaries (morning→afternoon, etc.)
+	// 3. Same location, different times
+	// 4. Adjacent locations (for routine flows)
+	// 5. Concurrent activities (same time, different locations)
+
+	key := generatePatternKey(anchor1, anchor2)
+
+	a.learnedMutex.RLock()
+	_, alreadySampled := a.patternObservations[key]
+	a.learnedMutex.RUnlock()
+
+	// Don't resample same pattern during seeding
+	if alreadySampled {
+		return false
+	}
+
+	// Sample all unique patterns we encounter
+	return true
+}
+
+// recordObservation adds an observation to the learned model
+func (a *ComputationAgent) recordObservation(anchor1, anchor2 *types.SemanticAnchor, distance float64) {
+	key := generatePatternKey(anchor1, anchor2)
+
+	a.learnedMutex.Lock()
+	defer a.learnedMutex.Unlock()
+
+	if _, exists := a.patternObservations[key]; !exists {
+		a.patternObservations[key] = make([]float64, 0)
+	}
+
+	a.patternObservations[key] = append(a.patternObservations[key], distance)
+
+	// Update learned distance (average of observations)
+	sum := 0.0
+	for _, d := range a.patternObservations[key] {
+		sum += d
+	}
+	a.learnedDistances[key] = sum / float64(len(a.patternObservations[key]))
+
+	a.logger.Debug("Recorded observation",
+		"key", key,
+		"distance", distance,
+		"observations", len(a.patternObservations[key]),
+		"avg", a.learnedDistances[key])
+}
+
+// getLearnedDistanceWithConfidence returns learned distance and confidence score
+func (a *ComputationAgent) getLearnedDistanceWithConfidence(
+	anchor1, anchor2 *types.SemanticAnchor,
+) (*float64, float64) {
+	key := generatePatternKey(anchor1, anchor2)
+
+	a.learnedMutex.RLock()
+	defer a.learnedMutex.RUnlock()
+
+	observations, exists := a.patternObservations[key]
+	if !exists || len(observations) == 0 {
+		return nil, 0.0
+	}
+
+	// Calculate confidence based on:
+	// 1. Number of observations (more = higher confidence)
+	// 2. Variance of observations (lower variance = higher confidence)
+
+	numObs := len(observations)
+	if numObs == 0 {
+		return nil, 0.0
+	}
+
+	// Calculate average
+	sum := 0.0
+	for _, d := range observations {
+		sum += d
+	}
+	avg := sum / float64(numObs)
+
+	// Calculate variance
+	variance := 0.0
+	for _, d := range observations {
+		diff := d - avg
+		variance += diff * diff
+	}
+	variance = variance / float64(numObs)
+	stdDev := math.Sqrt(variance)
+
+	// Confidence scoring:
+	// - 1 observation: 0.5 confidence
+	// - 2 observations: 0.7 confidence
+	// - 3+ observations: 0.9 confidence
+	// - Reduce by variance (high variance = lower confidence)
+
+	obsConfidence := 0.5
+	if numObs >= 3 {
+		obsConfidence = 0.9
+	} else if numObs == 2 {
+		obsConfidence = 0.7
+	}
+
+	// Variance penalty: if stdDev > 0.2, reduce confidence
+	variancePenalty := math.Min(stdDev*2, 0.3) // Max penalty of 0.3
+
+	confidence := math.Max(0.0, obsConfidence-variancePenalty)
+
+	return &avg, confidence
+}
+
+// queueForVerification adds a pair to the uncertain queue for later LLM verification
+func (a *ComputationAgent) queueForVerification(anchor1, anchor2 *types.SemanticAnchor) {
+	a.learnedMutex.Lock()
+	defer a.learnedMutex.Unlock()
+
+	// Only queue if not already in queue and queue isn't too large
+	if len(a.uncertainQueue) < 50 && !a.isInUncertainQueueUnsafe(anchor1, anchor2) {
+		a.uncertainQueue = append(a.uncertainQueue, [2]*types.SemanticAnchor{anchor1, anchor2})
+		a.logger.Debug("Queued for verification",
+			"anchor1", anchor1.ID,
+			"anchor2", anchor2.ID,
+			"queue_size", len(a.uncertainQueue))
+	}
+}
+
+// isInUncertainQueue checks if a pair is in the uncertain queue (thread-safe)
+func (a *ComputationAgent) isInUncertainQueue(anchor1, anchor2 *types.SemanticAnchor) bool {
+	a.learnedMutex.RLock()
+	defer a.learnedMutex.RUnlock()
+	return a.isInUncertainQueueUnsafe(anchor1, anchor2)
+}
+
+// isInUncertainQueueUnsafe checks queue without locking (caller must hold lock)
+func (a *ComputationAgent) isInUncertainQueueUnsafe(anchor1, anchor2 *types.SemanticAnchor) bool {
+	for _, pair := range a.uncertainQueue {
+		if (pair[0].ID == anchor1.ID && pair[1].ID == anchor2.ID) ||
+			(pair[0].ID == anchor2.ID && pair[1].ID == anchor1.ID) {
+			return true
+		}
+	}
+	return false
+}
+
+// removeFromUncertainQueue removes a pair from the queue
+func (a *ComputationAgent) removeFromUncertainQueue(anchor1, anchor2 *types.SemanticAnchor) {
+	a.learnedMutex.Lock()
+	defer a.learnedMutex.Unlock()
+
+	for i, pair := range a.uncertainQueue {
+		if (pair[0].ID == anchor1.ID && pair[1].ID == anchor2.ID) ||
+			(pair[0].ID == anchor2.ID && pair[1].ID == anchor1.ID) {
+			// Remove from queue
+			a.uncertainQueue = append(a.uncertainQueue[:i], a.uncertainQueue[i+1:]...)
+			a.logger.Debug("Removed from verification queue",
+				"anchor1", anchor1.ID,
+				"anchor2", anchor2.ID,
+				"queue_size", len(a.uncertainQueue))
+			return
+		}
+	}
 }
 
 // computeLLMDistance asks LLM to rate semantic relatedness

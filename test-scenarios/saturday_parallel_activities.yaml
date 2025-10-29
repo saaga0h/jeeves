@@ -1,0 +1,431 @@
+name: "Saturday Parallel Activities - Gaming/Reading vs Coding"
+description: "Complex Saturday with morning routines, breakfast, parallel activities (gaming/reading in living room vs coding in study), and shared dinner"
+
+test_mode:
+  virtual_start: "2025-10-25T08:00:00Z"
+  time_scale: 10  # Slow down to 10x to allow LLM computation time
+
+setup:
+  location: "universe"
+  initial_state:
+    pattern_discovery_enabled: true
+    pattern_distance_strategy: "llm_first"  # Pure LLM for consistent semantic distances
+    pattern_distance_batch_size: 50  # Small batches for frequent computation
+
+events:
+  # === MORNING ROUTINES ===
+  - time: 0
+    sensor: "motion:bedroom"
+    value: true
+    description: "Wake up"
+  - time: 30
+    sensor: "motion:bedroom"
+    value: true
+    description: "Get out of bed"
+  - time: 300
+    sensor: "motion:bathroom"
+    value: true
+    description: "Enter bathroom"
+  - time: 330
+    sensor: "motion:bathroom"
+    value: true
+    description: "Use bathroom"
+  - time: 480
+    sensor: "motion:kitchen"
+    description: "Enter kitchen"
+    value: true
+  - time: 510
+    sensor: "motion:kitchen"
+    value: true
+    description: "Prepare breakfast"
+  - time: 720
+    sensor: "motion:kitchen"
+    value: true
+    description: "Finish breakfast prep"
+
+  # === BREAKFAST 08:15-09:15 ===
+  - time: 900
+    type: lighting
+    location: dining_room
+    description: "Turn on breakfast light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-25T08:15:00Z"
+
+  # === PARALLEL START 09:15 ===
+  # Person A: Living room gaming
+  - time: 4500
+    sensor: "motion:living_room"
+    value: true
+    description: "Enter living room to game"
+  - time: 4800
+    type: media
+    location: living_room
+    description: "Start gaming on PlayStation 5"
+    data:
+      state: "playing"
+      media_type: "game"
+      source: "playstation_5"
+      timestamp: "2025-10-25T09:20:00Z"
+  - time: 5400
+    sensor: "motion:living_room"
+    value: true
+    description: "Active in living room"
+  - time: 6600
+    sensor: "motion:living_room"
+    value: true
+    description: "Active in living room"
+  - time: 7800
+    sensor: "motion:living_room"
+    value: true
+    description: "Active in living room"
+  - time: 9000
+    sensor: "motion:living_room"
+    value: true
+    description: "Active in living room"
+  - time: 10200
+    sensor: "motion:living_room"
+    value: true
+    description: "Active in living room"
+  # End gaming, start reading 11:00
+  - time: 10800
+    type: media
+    location: living_room
+    description: "Stop gaming session"
+    data:
+      state: "stopped"
+      media_type: "game"
+      timestamp: "2025-10-25T11:00:00Z"
+  - time: 10810
+    type: lighting
+    location: living_room
+    description: "Turn on reading corner light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      zone: "reading_corner"
+      timestamp: "2025-10-25T11:00:10Z"
+  - time: 11400
+    sensor: "motion:living_room"
+    value: true
+    description: "Reading in living room"
+  - time: 13200
+    sensor: "motion:living_room"
+    value: true
+    description: "Reading in living room"
+  - time: 15000
+    sensor: "motion:living_room"
+    value: true
+    description: "Reading in living room"
+  - time: 16800
+    sensor: "motion:living_room"
+    value: true
+    description: "Reading in living room"
+  - time: 18600
+    sensor: "motion:living_room"
+    value: true
+    description: "Reading in living room"
+  # Person B: Study coding
+  - time: 4520
+    sensor: "motion:study"
+    value: true
+    description: "Enter study to code"
+  - time: 4530
+    type: lighting
+    location: study
+    description: "Turn on study light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-25T09:15:30Z"
+  - time: 5100
+    sensor: "motion:study"
+    value: true
+    description: "Active in study"
+  - time: 6000
+    sensor: "motion:study"
+    value: true
+    description: "Active in study"
+  - time: 6900
+    sensor: "motion:study"
+    value: true
+    description: "Active in study"
+  - time: 7800
+    sensor: "motion:study"
+    value: true
+    description: "Active in study"
+  - time: 8700
+    sensor: "motion:study"
+    value: true
+    description: "Active in study"
+  - time: 9600
+    sensor: "motion:study"
+    value: true
+    description: "Active in study"
+  - time: 10500
+    sensor: "motion:study"
+    value: true
+    description: "Active in study"
+  - time: 11400
+    sensor: "motion:study"
+    value: true
+    description: "Active in study"
+  - time: 12300
+    sensor: "motion:study"
+    value: true
+    description: "Active in study"
+  - time: 13200
+    sensor: "motion:study"
+    value: true
+    description: "Active in study"
+  - time: 14100
+    sensor: "motion:study"
+    value: true
+    description: "Active in study"
+  - time: 15000
+    sensor: "motion:study"
+    value: true
+    description: "Active in study"
+  - time: 15900
+    sensor: "motion:study"
+    value: true
+    description: "Active in study"
+  - time: 16800
+    sensor: "motion:study"
+    value: true
+    description: "Active in study"
+  - time: 17700
+    sensor: "motion:study"
+    value: true
+    description: "Active in study"
+  - time: 18600
+    sensor: "motion:study"
+    value: true
+    description: "Active in study"
+  - time: 19500
+    sensor: "motion:study"
+    value: true
+    description: "Active in study"
+  # === END PARALLEL 13:30 ===
+  - time: 19800
+    type: lighting
+    location: living_room
+    description: "Turn off reading corner light"
+    data:
+      state: "off"
+      zone: "reading_corner"
+      source: "manual"
+      timestamp: "2025-10-25T13:30:00Z"
+  - time: 19810
+    type: lighting
+    location: study
+    description: "Turn off study light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-25T13:30:10Z"
+
+  # Turn off breakfast light (fuzzy)
+  - time: 19500
+    type: lighting
+    location: dining_room
+    description: "Turn off breakfast light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-25T13:25:00Z"
+
+  # === DINNER PREP 13:30-14:00 ===
+  - time: 19860
+    sensor: "motion:kitchen"
+    value: true
+    description: "Enter kitchen to prepare dinner"
+  - time: 20400
+    sensor: "motion:kitchen"
+    value: true
+    description: "Active in kitchen"
+  - time: 21000
+    sensor: "motion:kitchen"
+    value: true
+    description: "Active in kitchen"
+  # === DINNER 14:00-14:30 ===
+  - time: 21600
+    type: lighting
+    location: dining_room
+    description: "Turn on dinner light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-25T14:00:00Z"
+  - time: 23400
+    type: lighting
+    location: dining_room
+    description: "Turn off dinner light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-25T14:30:00Z"
+
+  # === TV TOGETHER 14:30-15:00 ===
+  - time: 23430
+    sensor: "motion:living_room"
+    value: true
+    description: "Enter living room to watch TV together"
+  - time: 23460
+    type: media
+    location: living_room
+    description: "Start watching video on Apple TV"
+    data:
+      state: "playing"
+      media_type: "video"
+      source: "apple_tv"
+      timestamp: "2025-10-25T14:31:00Z"
+  - time: 23470
+    type: lighting
+    location: living_room
+    description: "Dim living room lights for TV"
+    data:
+      state: "on"
+      brightness: 30
+      source: "manual"
+      timestamp: "2025-10-25T14:31:10Z"
+  - time: 24600
+    sensor: "motion:living_room"
+    value: true
+    description: "Active in living room while watching TV"
+  - time: 25200
+    type: media
+    location: living_room
+    description: "Stop watching video"
+    data:
+      state: "stopped"
+      media_type: "video"
+      timestamp: "2025-10-25T15:00:00Z"
+  - time: 25210
+    type: lighting
+    location: living_room
+    description: "Turn off living room lights after TV"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-25T15:00:10Z"
+
+  # === BEHAVIOR PROCESSING - Pure LLM Sequential Batches ===
+  # Strategy: Small batches (50 pairs) with LONG gaps to allow LLM completion
+  # Time scale 10x: 1 real min = 10 virtual min = 600 virtual sec
+  # LLM batch time: ~2-3 min real = 20-30 min virtual
+
+  # Batch 1: After morning routines (t=9min real, 5400s = 1.5h virtual)
+  # Virtual: 09:30, lookback 1h → 08:30-09:30
+  - time: 5400
+    type: behavior
+    location: universe
+    description: "Batch 1: Consolidate morning routines"
+    data:
+      action: "consolidate"
+      lookback_hours: 1
+  - time: 5700
+    type: behavior
+    location: universe
+    description: "Batch 1: Compute distances (50 pairs, ~3min real)"
+    data:
+      action: "compute_distances"
+      lookback_hours: 1
+
+  # Wait 5 minutes real time for LLM to finish = 3000s virtual
+  # Batch 2: (t=14min real, 8400s = 2.33h virtual, total 3.83h = 11:50)
+  # Virtual: 11:50, lookback 3h → 08:50-11:50
+  - time: 8400
+    type: behavior
+    location: universe
+    description: "Batch 2: Consolidate more activity"
+    data:
+      action: "consolidate"
+      lookback_hours: 3
+  - time: 8700
+    type: behavior
+    location: universe
+    description: "Batch 2: Compute distances (50 pairs, ~3min real)"
+    data:
+      action: "compute_distances"
+      lookback_hours: 3
+
+  # Wait another 5 minutes real = 3000s virtual
+  # Batch 3: (t=19min real, 11400s = 3.17h virtual, total 6h = 14:00)
+  # Virtual: 14:00, lookback 5h → 09:00-14:00
+  - time: 11400
+    type: behavior
+    location: universe
+    description: "Batch 3: Consolidate parallel activities"
+    data:
+      action: "consolidate"
+      lookback_hours: 5
+  - time: 11700
+    type: behavior
+    location: universe
+    description: "Batch 3: Compute distances (50 pairs, ~3min real)"
+    data:
+      action: "compute_distances"
+      lookback_hours: 5
+
+  # Wait for LLM distance computation to complete (~95 min real time to be safe)
+  # Previous run timeline:
+  #   - Batch 1 (lookback 1h): 13:11-13:13 (42-44 min) → 46 distances
+  #   - Batch 2 (lookback 3h): 13:13-14:01 (44-92 min) → 922 distances (MAIN BATCH)
+  #   - Batch 3 (lookback 5h): 14:01 (92 min) → 0 new distances
+  #   - Pattern ran too early at 13:24 (55 min) with only 265/968 distances computed
+  # Pattern detection: (t=95min real, 57000s = 15.83h virtual)
+  # Virtual: 23:50, lookback 15h → 08:50 (covers full scenario from 08:00)
+  - time: 57000
+    type: behavior
+    location: universe
+    description: "Discover behavior patterns (after LLM distances complete)"
+    data:
+      action: "discover_patterns"
+      min_anchors: 3
+      lookback_hours: 15
+
+wait:
+  - time: 63000
+    description: "Wait for pattern detection to complete (t=105min real)"
+
+expectations:
+  postgres:
+    # Check anchors exist
+    - time: 6000
+      postgres_query: "SELECT COUNT(*) FROM semantic_anchors"
+      postgres_expected: ">=5"
+
+    # Check distances are being computed (t=30min real = 18000 sec scenario time)
+    - time: 18000
+      postgres_query: "SELECT COUNT(*) FROM anchor_distances WHERE source = 'llm'"
+      postgres_expected: ">=100"
+
+    # Check most distances computed (t=92min real = 55200 sec scenario time)
+    - time: 55200
+      postgres_query: "SELECT COUNT(*) FROM anchor_distances WHERE source = 'llm'"
+      postgres_expected: ">=900"
+
+    # Final check - patterns should exist (t=100min real = 60000 sec scenario time)
+    - time: 60000
+      postgres_query: "SELECT COUNT(*) FROM behavioral_patterns"
+      postgres_expected: ">=3"
+
+    # Check outlier rate is low
+    - time: 60000
+      postgres_query: |
+        SELECT COUNT(*) FILTER (WHERE distance >= 0.7)
+        FROM anchor_distances
+      postgres_expected: "<50"
+
+    # Check that most anchors are in patterns (not outliers)
+    - time: 60000
+      postgres_query: |
+        SELECT COUNT(*) FROM semantic_anchors
+        WHERE pattern_id IS NOT NULL
+      postgres_expected: ">=60"

@@ -150,12 +150,16 @@ func (a *DiscoveryAgent) handleTrigger(msg mqtt.Message) {
 func (a *DiscoveryAgent) discoverPatterns(ctx context.Context, minAnchors, lookbackHours int) error {
 	startTime := a.timeManager.Now()
 
+	currentTime := a.timeManager.Now()
+	since := currentTime.Add(-time.Duration(lookbackHours) * time.Hour)
+
 	a.logger.Info("Starting pattern discovery",
 		"min_anchors", minAnchors,
-		"lookback_hours", lookbackHours)
+		"lookback_hours", lookbackHours,
+		"current_time", currentTime,
+		"since", since)
 
 	// Get recent anchors with computed distances
-	since := a.timeManager.Now().Add(-time.Duration(lookbackHours) * time.Hour)
 	anchors, err := a.storage.GetAnchorsWithDistances(ctx, since)
 	if err != nil {
 		return fmt.Errorf("failed to get anchors: %w", err)

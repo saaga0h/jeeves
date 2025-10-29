@@ -16,7 +16,8 @@
       "Bash(python3:*)",
       "Bash(docker-compose build:*)",
       "Bash(docker-compose up:*)",
-      "Bash(docker-compose:*)"
+      "Bash(docker-compose:*)",
+      "Bash(docker ps:*)"
     ],
     "deny": [],
     "ask": []
