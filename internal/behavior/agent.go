@@ -47,6 +47,9 @@ type Agent struct {
 	clusteringEngine    *clustering.ClusteringEngine
 	patternInterpreter  *patterns.PatternInterpreter
 	discoveryAgent      *patterns.DiscoveryAgent
+
+	// Batch processing coordinator (optional - Phase 5)
+	batchCoordinator    *BatchCoordinator
 }
 
 // Event represents a sensor event used for episode detection and anchor creation
@@ -162,6 +165,22 @@ func (a *Agent) initializePatternDiscovery() error {
 		a.timeManager,
 	)
 
+	// Initialize batch coordinator if batch processing is enabled
+	if a.cfg.BatchProcessingEnabled {
+		a.logger.Info("Initializing batch processing coordinator",
+			"batch_duration", a.cfg.BatchDuration,
+			"batch_overlap", a.cfg.BatchOverlap,
+			"schedule_enabled", a.cfg.BatchScheduleEnabled)
+
+		a.batchCoordinator = NewBatchCoordinator(
+			a.cfg,
+			a.distanceAgent,
+			a.discoveryAgent,
+			a.mqtt,
+			a.logger,
+		)
+	}
+
 	a.logger.Info("Pattern discovery system initialized successfully")
 	return nil
 }
@@ -214,6 +233,13 @@ func (a *Agent) Start(ctx context.Context) error {
 				}
 			}()
 		}
+
+		// Start batch coordinator if enabled
+		if a.batchCoordinator != nil {
+			if err := a.batchCoordinator.Start(ctx); err != nil {
+				a.logger.Error("Failed to start batch coordinator", "error", err)
+			}
+		}
 	}
 
 	// go a.runConsolidationJob(ctx)
@@ -225,6 +251,12 @@ func (a *Agent) Start(ctx context.Context) error {
 
 func (a *Agent) Stop() error {
 	a.logger.Info("Stopping behavior agent")
+
+	// Stop batch coordinator if running
+	if a.batchCoordinator != nil {
+		a.batchCoordinator.Stop()
+	}
+
 	a.mqtt.Disconnect()
 	return a.pgClient.Disconnect()
 }

@@ -1,0 +1,249 @@
+name: "Sliding Window Short - Sequential Morning Routine"
+description: "Short test scenario with 3 batches processing sequential morning activities. Tests basic sliding window functionality."
+
+test_mode:
+  virtual_start: "2025-10-30T06:00:00Z"
+  time_scale: 10  # 10x time scale for faster testing
+
+setup:
+  location: "universe"
+  initial_state:
+    pattern_discovery_enabled: true
+    pattern_distance_strategy: "llm_first"
+    pattern_distance_batch_size: 50
+    batch_processing_enabled: true
+    batch_duration: "20m"  # 20 minute batches
+    batch_overlap: "2m"    # 2 minute overlap
+
+events:
+  # === WAKE UP (06:00-06:05) ===
+  - time: 0
+    sensor: "motion:bedroom"
+    value: true
+    description: "Wake up"
+
+  - time: 60
+    sensor: "motion:bedroom"
+    value: true
+    description: "Get out of bed"
+
+  - time: 180
+    type: lighting
+    location: bedroom
+    description: "Turn on bedroom light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T06:03:00Z"
+
+  # === BATHROOM (06:05-06:15) ===
+  - time: 300
+    sensor: "motion:bathroom"
+    value: true
+    description: "Enter bathroom"
+
+  - time: 330
+    type: lighting
+    location: bathroom
+    description: "Turn on bathroom light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T06:05:30Z"
+
+  - time: 600
+    sensor: "motion:bathroom"
+    value: true
+    description: "Use bathroom"
+
+  - time: 840
+    type: lighting
+    location: bathroom
+    description: "Turn off bathroom light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T06:14:00Z"
+
+  # === KITCHEN (06:15-06:25) ===
+  - time: 900
+    sensor: "motion:kitchen"
+    value: true
+    description: "Enter kitchen"
+
+  - time: 930
+    type: lighting
+    location: kitchen
+    description: "Turn on kitchen light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T06:15:30Z"
+
+  - time: 1080
+    sensor: "motion:kitchen"
+    value: true
+    description: "Prepare breakfast"
+
+  - time: 1380
+    sensor: "motion:kitchen"
+    value: true
+    description: "Finish breakfast prep"
+
+  # === DINING (06:25-06:35) ===
+  - time: 1500
+    type: lighting
+    location: dining_room
+    description: "Turn on dining light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T06:25:00Z"
+
+  - time: 1560
+    sensor: "motion:dining_room"
+    value: true
+    description: "Start eating"
+
+  - time: 1920
+    sensor: "motion:dining_room"
+    value: true
+    description: "Finish eating"
+
+  - time: 2040
+    type: lighting
+    location: dining_room
+    description: "Turn off dining light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T06:34:00Z"
+
+  # === CLEANUP (06:35-06:40) ===
+  - time: 2100
+    sensor: "motion:kitchen"
+    value: true
+    description: "Clean up kitchen"
+
+  - time: 2340
+    type: lighting
+    location: kitchen
+    description: "Turn off kitchen light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T06:39:00Z"
+
+  # === BATCH PROCESSING ===
+  # Batch 1: 06:00-06:20 (0-20min), no overlap
+  # Virtual time: 0-1200s, Real time: t=2min (120s real)
+
+  # Step 1: Consolidate sensor data into episodes and anchors
+  - time: 1200
+    type: behavior
+    location: universe
+    description: "Batch 1: Consolidate sensor data"
+    data:
+      action: "consolidate"
+      lookback_hours: 1
+
+  # Step 2: Process batch (compute distances + discover patterns)
+  - time: 1230
+    type: behavior
+    location: universe
+    description: "Batch 1: Process morning wake/bathroom routine"
+    data:
+      action: "process_batch"
+      batch_end: "2025-10-30T06:20:00Z"
+      batch_duration_hours: 0.333  # 20 minutes
+      overlap_minutes: 0  # First batch, no overlap
+
+  # Batch 2: 06:18-06:38 (18-38min), 2min overlap
+  # Virtual time: 2280s, Real time: t=4min (240s real)
+
+  # Step 1: Consolidate new sensor data
+  - time: 2280
+    type: behavior
+    location: universe
+    description: "Batch 2: Consolidate sensor data"
+    data:
+      action: "consolidate"
+      lookback_hours: 2
+
+  # Step 2: Process batch
+  - time: 2310
+    type: behavior
+    location: universe
+    description: "Batch 2: Process kitchen/dining routine"
+    data:
+      action: "process_batch"
+      batch_end: "2025-10-30T06:38:00Z"
+      batch_duration_hours: 0.333  # 20 minutes
+      overlap_minutes: 2
+
+  # Batch 3: 06:36-06:50 (36-50min), 2min overlap
+  # Virtual time: 3000s, Real time: t=5min (300s real)
+
+  # Step 1: Consolidate final sensor data
+  - time: 3000
+    type: behavior
+    location: universe
+    description: "Batch 3: Consolidate sensor data"
+    data:
+      action: "consolidate"
+      lookback_hours: 2
+
+  # Step 2: Process batch
+  - time: 3030
+    type: behavior
+    location: universe
+    description: "Batch 3: Process cleanup routine"
+    data:
+      action: "process_batch"
+      batch_end: "2025-10-30T06:50:00Z"
+      batch_duration_hours: 0.333  # 20 minutes
+      overlap_minutes: 2
+
+wait:
+  - time: 3600
+    description: "Wait for all batch processing to complete (t=6min real)"
+
+expectations:
+  postgres:
+    # Check anchors created (after events, before first batch)
+    - time: 1000
+      postgres_query: "SELECT COUNT(*) FROM semantic_anchors"
+      postgres_expected: ">=10"
+
+    # After Batch 1: Should have distances and maybe 1 pattern
+    - time: 1500
+      postgres_query: "SELECT COUNT(*) FROM anchor_distances WHERE source = 'llm'"
+      postgres_expected: ">=10"
+
+    # After Batch 2: More distances
+    - time: 2500
+      postgres_query: "SELECT COUNT(*) FROM anchor_distances WHERE source = 'llm'"
+      postgres_expected: ">=30"
+
+    # After Batch 3: All batches complete
+    - time: 3300
+      postgres_query: "SELECT COUNT(*) FROM behavioral_patterns"
+      postgres_expected: ">=2"
+
+    # Final check: Good outlier rate
+    - time: 3300
+      postgres_query: |
+        SELECT COUNT(*) FROM semantic_anchors
+        WHERE pattern_id IS NOT NULL
+      postgres_expected: ">=10"
+
+    # Distance quality check
+    - time: 3300
+      postgres_query: |
+        SELECT COUNT(*) FILTER (WHERE distance >= 0.7)
+        FROM anchor_distances
+      postgres_expected: "<10"

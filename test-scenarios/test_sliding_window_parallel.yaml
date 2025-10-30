@@ -1,0 +1,298 @@
+name: "Sliding Window Parallel - Gaming vs Coding"
+description: "Tests sliding window with parallel activities: living room gaming session vs study coding session"
+
+test_mode:
+  virtual_start: "2025-10-30T09:00:00Z"
+  time_scale: 10  # 10x time scale
+
+setup:
+  location: "universe"
+  initial_state:
+    pattern_discovery_enabled: true
+    pattern_distance_strategy: "llm_first"
+    pattern_distance_batch_size: 50
+    batch_processing_enabled: true
+    batch_duration: "30m"  # 30 minute batches
+    batch_overlap: "5m"    # 5 minute overlap
+
+events:
+  # === PARALLEL START 09:00 ===
+  # Person A: Living room gaming
+  - time: 0
+    sensor: "motion:living_room"
+    value: true
+    description: "Enter living room to game"
+
+  - time: 30
+    type: lighting
+    location: living_room
+    description: "Turn on living room light"
+    data:
+      state: "on"
+      brightness: 80
+      source: "manual"
+      timestamp: "2025-10-30T09:00:30Z"
+
+  - time: 300
+    type: media
+    location: living_room
+    description: "Start gaming on PlayStation 5"
+    data:
+      state: "playing"
+      media_type: "game"
+      source: "playstation_5"
+      timestamp: "2025-10-30T09:05:00Z"
+
+  - time: 600
+    sensor: "motion:living_room"
+    value: true
+    description: "Gaming"
+
+  - time: 900
+    sensor: "motion:living_room"
+    value: true
+    description: "Gaming"
+
+  - time: 1200
+    sensor: "motion:living_room"
+    value: true
+    description: "Gaming"
+
+  - time: 1500
+    sensor: "motion:living_room"
+    value: true
+    description: "Gaming"
+
+  # Person B: Study coding
+  - time: 60
+    sensor: "motion:study"
+    value: true
+    description: "Enter study to code"
+
+  - time: 90
+    type: lighting
+    location: study
+    description: "Turn on study light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T09:01:30Z"
+
+  - time: 360
+    sensor: "motion:study"
+    value: true
+    description: "Coding"
+
+  - time: 720
+    sensor: "motion:study"
+    value: true
+    description: "Coding"
+
+  - time: 1080
+    sensor: "motion:study"
+    value: true
+    description: "Coding"
+
+  - time: 1440
+    sensor: "motion:study"
+    value: true
+    description: "Coding"
+
+  # === CONTINUE PARALLEL 09:30-10:00 ===
+  - time: 1800
+    sensor: "motion:living_room"
+    value: true
+    description: "Still gaming"
+
+  - time: 1800
+    sensor: "motion:study"
+    value: true
+    description: "Still coding"
+
+  - time: 2100
+    sensor: "motion:living_room"
+    value: true
+    description: "Gaming"
+
+  - time: 2100
+    sensor: "motion:study"
+    value: true
+    description: "Coding"
+
+  - time: 2400
+    sensor: "motion:living_room"
+    value: true
+    description: "Gaming"
+
+  - time: 2400
+    sensor: "motion:study"
+    value: true
+    description: "Coding"
+
+  # === BREAK TIME 10:00-10:10 ===
+  - time: 2700
+    type: media
+    location: living_room
+    description: "Pause gaming"
+    data:
+      state: "stopped"
+      media_type: "game"
+      timestamp: "2025-10-30T10:00:00Z"
+
+  - time: 2730
+    sensor: "motion:kitchen"
+    value: true
+    description: "Both go to kitchen for break"
+
+  - time: 2760
+    type: lighting
+    location: kitchen
+    description: "Turn on kitchen light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T10:01:00Z"
+
+  - time: 3300
+    sensor: "motion:kitchen"
+    value: true
+    description: "Break time"
+
+  # === RETURN TO ACTIVITIES 10:10 ===
+  - time: 3600
+    type: lighting
+    location: kitchen
+    description: "Turn off kitchen light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T10:10:00Z"
+
+  - time: 3630
+    sensor: "motion:living_room"
+    value: true
+    description: "Return to living room"
+
+  - time: 3630
+    sensor: "motion:study"
+    value: true
+    description: "Return to study"
+
+  - time: 3660
+    type: media
+    location: living_room
+    description: "Resume gaming"
+    data:
+      state: "playing"
+      media_type: "game"
+      source: "playstation_5"
+      timestamp: "2025-10-30T10:11:00Z"
+
+  - time: 3960
+    sensor: "motion:living_room"
+    value: true
+    description: "Gaming"
+
+  - time: 3960
+    sensor: "motion:study"
+    value: true
+    description: "Coding"
+
+  # === BATCH PROCESSING ===
+  # Batch 1: 09:00-09:30 (0-30min), no overlap
+  # Virtual time: 1800s, Real time: t=3min (180s real)
+  - time: 1800
+    type: behavior
+    location: universe
+    description: "Batch 1: Process initial parallel activities"
+    data:
+      action: "process_batch"
+      batch_end: "2025-10-30T09:30:00Z"
+      batch_duration_hours: 0.5  # 30 minutes
+      overlap_minutes: 0  # First batch, no overlap
+
+  # Batch 2: 09:25-09:55 (25-55min), 5min overlap
+  # Virtual time: 3300s, Real time: t=5.5min (330s real)
+  - time: 3300
+    type: behavior
+    location: universe
+    description: "Batch 2: Process continued parallel activities"
+    data:
+      action: "process_batch"
+      batch_end: "2025-10-30T09:55:00Z"
+      batch_duration_hours: 0.5  # 30 minutes
+      overlap_minutes: 5
+
+  # Batch 3: 09:50-10:20 (50-80min), 5min overlap (includes break transition)
+  # Virtual time: 4800s, Real time: t=8min (480s real)
+  - time: 4800
+    type: behavior
+    location: universe
+    description: "Batch 3: Process break and resumption"
+    data:
+      action: "process_batch"
+      batch_end: "2025-10-30T10:20:00Z"
+      batch_duration_hours: 0.5  # 30 minutes
+      overlap_minutes: 5
+
+wait:
+  - time: 5400
+    description: "Wait for all batch processing to complete (t=9min real)"
+
+expectations:
+  postgres:
+    # Check anchors created
+    - time: 1500
+      postgres_query: "SELECT COUNT(*) FROM semantic_anchors"
+      postgres_expected: ">=15"
+
+    # After Batch 1: Should detect parallel activities
+    - time: 2400
+      postgres_query: "SELECT COUNT(*) FROM anchor_distances WHERE source = 'llm'"
+      postgres_expected: ">=20"
+
+    # After Batch 2: More distances computed
+    - time: 4000
+      postgres_query: "SELECT COUNT(*) FROM anchor_distances WHERE source = 'llm'"
+      postgres_expected: ">=50"
+
+    # After Batch 3: Should have patterns for both activities
+    - time: 5100
+      postgres_query: "SELECT COUNT(*) FROM behavioral_patterns"
+      postgres_expected: ">=2"
+
+    # Check pattern separation: living_room pattern
+    - time: 5100
+      postgres_query: |
+        SELECT COUNT(DISTINCT sa.id)
+        FROM semantic_anchors sa
+        JOIN behavioral_patterns bp ON sa.pattern_id = bp.id
+        WHERE sa.location = 'living_room'
+          AND sa.pattern_id IS NOT NULL
+      postgres_expected: ">=5"
+
+    # Check pattern separation: study pattern
+    - time: 5100
+      postgres_query: |
+        SELECT COUNT(DISTINCT sa.id)
+        FROM semantic_anchors sa
+        JOIN behavioral_patterns bp ON sa.pattern_id = bp.id
+        WHERE sa.location = 'study'
+          AND sa.pattern_id IS NOT NULL
+      postgres_expected: ">=5"
+
+    # Good outlier rate
+    - time: 5100
+      postgres_query: |
+        SELECT ROUND((COUNT(*) FILTER (WHERE pattern_id IS NULL)::float / COUNT(*) * 100)::numeric, 1)
+        FROM semantic_anchors
+      postgres_expected: "<40"
+
+    # Distance quality
+    - time: 5100
+      postgres_query: |
+        SELECT COUNT(*) FILTER (WHERE distance >= 0.7)
+        FROM anchor_distances
+      postgres_expected: "<15"

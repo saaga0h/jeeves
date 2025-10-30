@@ -198,7 +198,19 @@ func (s *AnchorStorage) FindSimilarAnchors(ctx context.Context, embedding pgvect
 // Uses smart filtering to only consider semantically related pairs (same/adjacent locations, time windows, day types).
 // This reduces the O(n²) problem to ~O(n×k) where k is average neighbors per anchor (~10-50).
 func (s *AnchorStorage) GetAnchorsNeedingDistances(ctx context.Context, limit int) ([][2]uuid.UUID, error) {
-	query := `
+	return s.GetAnchorsNeedingDistancesInWindow(ctx, limit, time.Time{}, time.Time{})
+}
+
+// GetAnchorsNeedingDistancesInWindow finds pairs of anchors within a time window that don't have pre-computed distances.
+// If windowStart or windowEnd is zero, no time filtering is applied (equivalent to GetAnchorsNeedingDistances).
+// For batch processing: at least one anchor must be in the batch window, the other can be in the overlap window.
+func (s *AnchorStorage) GetAnchorsNeedingDistancesInWindow(
+	ctx context.Context,
+	limit int,
+	windowStart, windowEnd time.Time,
+) ([][2]uuid.UUID, error) {
+	// Build query with optional time window filtering
+	queryBase := `
 		SELECT a1.id, a2.id
 		FROM semantic_anchors a1
 		CROSS JOIN semantic_anchors a2
@@ -208,7 +220,24 @@ func (s *AnchorStorage) GetAnchorsNeedingDistances(ctx context.Context, limit in
 			FROM anchor_distances ad
 			WHERE (ad.anchor1_id = a1.id AND ad.anchor2_id = a2.id)
 			   OR (ad.anchor1_id = a2.id AND ad.anchor2_id = a1.id)
-		  )
+		  )`
+
+	// Add time window filter if specified
+	var timeFilter string
+	var args []interface{}
+	argIndex := 1
+
+	if !windowStart.IsZero() && !windowEnd.IsZero() {
+		// Both anchors must be within the window (windowStart to windowEnd)
+		timeFilter = fmt.Sprintf(`
+		  AND a1.timestamp >= $%d AND a1.timestamp < $%d
+		  AND a2.timestamp >= $%d AND a2.timestamp < $%d`,
+			argIndex, argIndex+1, argIndex+2, argIndex+3)
+		args = append(args, windowStart, windowEnd, windowStart, windowEnd)
+		argIndex += 4
+	}
+
+	query := queryBase + timeFilter + `
 		  -- FILTER 1: Same or adjacent locations (reduces pairs by ~80%)
 		  AND (
 			a1.location = a2.location
@@ -230,10 +259,11 @@ func (s *AnchorStorage) GetAnchorsNeedingDistances(ctx context.Context, limit in
 			OR ((a1.context->>'time_of_day') = 'evening' AND (a2.context->>'time_of_day') = 'afternoon')
 		  )
 		ORDER BY a1.created_at DESC, a2.created_at DESC
-		LIMIT $1
-	`
+		LIMIT $` + fmt.Sprintf("%d", argIndex)
 
-	rows, err := s.db.QueryContext(ctx, query, limit)
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query anchor pairs: %w", err)
 	}
@@ -764,21 +794,46 @@ func (s *AnchorStorage) UpdateAnchorPattern(ctx context.Context, anchorID, patte
 
 // GetAnchorsWithDistances retrieves anchors that have computed distances
 func (s *AnchorStorage) GetAnchorsWithDistances(ctx context.Context, since time.Time) ([]*types.SemanticAnchor, error) {
-	query := `
+	return s.GetAnchorsWithDistancesInWindow(ctx, since, time.Time{})
+}
+
+// GetAnchorsWithDistancesInWindow retrieves anchors within a time window that have computed distances
+// If windowEnd is zero, all anchors since windowStart are returned (equivalent to GetAnchorsWithDistances).
+func (s *AnchorStorage) GetAnchorsWithDistancesInWindow(
+	ctx context.Context,
+	windowStart, windowEnd time.Time,
+) ([]*types.SemanticAnchor, error) {
+	queryBase := `
 		SELECT DISTINCT a.id, a.timestamp, a.location, a.semantic_embedding,
 		       a.context, a.signals, a.duration_minutes, a.duration_source,
 		       a.duration_confidence, a.preceding_anchor_id, a.following_anchor_id,
 		       a.pattern_id, a.created_at
 		FROM semantic_anchors a
-		WHERE a.timestamp >= $1
+		WHERE a.timestamp >= $1`
+
+	var query string
+	var args []interface{}
+	args = append(args, windowStart)
+
+	if !windowEnd.IsZero() {
+		query = queryBase + `
+		  AND a.timestamp < $2
 		  AND EXISTS (
 			SELECT 1 FROM anchor_distances d
 			WHERE d.anchor1_id = a.id OR d.anchor2_id = a.id
 		  )
-		ORDER BY a.timestamp ASC
-	`
+		ORDER BY a.timestamp ASC`
+		args = append(args, windowEnd)
+	} else {
+		query = queryBase + `
+		  AND EXISTS (
+			SELECT 1 FROM anchor_distances d
+			WHERE d.anchor1_id = a.id OR d.anchor2_id = a.id
+		  )
+		ORDER BY a.timestamp ASC`
+	}
 
-	rows, err := s.db.QueryContext(ctx, query, since)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query anchors with distances: %w", err)
 	}

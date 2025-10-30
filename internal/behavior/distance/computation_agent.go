@@ -156,6 +156,11 @@ func (a *ComputationAgent) handleTrigger(msg mqtt.Message) {
 	a.testTriggers <- TriggerEvent{LookbackHours: trigger.LookbackHours}
 }
 
+// ComputeDistancesWithLookback is a public method for triggering distance computation (used by batch coordinator)
+func (a *ComputationAgent) ComputeDistancesWithLookback(ctx context.Context, lookbackHours int) error {
+	return a.computeDistances(ctx, lookbackHours)
+}
+
 // computeDistances performs batch distance computation
 func (a *ComputationAgent) computeDistances(ctx context.Context, lookbackHours int) error {
 	startTime := a.timeManager.Now()

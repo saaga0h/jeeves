@@ -146,6 +146,184 @@ func (a *DiscoveryAgent) handleTrigger(msg mqtt.Message) {
 	}
 }
 
+// DiscoverPatternsWithLookback performs pattern discovery with the specified lookback period (for batch coordinator)
+func (a *DiscoveryAgent) DiscoverPatternsWithLookback(ctx context.Context, minAnchors, lookbackHours int) (int, error) {
+	if err := a.discoverPatterns(ctx, minAnchors, lookbackHours); err != nil {
+		return 0, err
+	}
+	// TODO: Return actual count of patterns created
+	return 0, nil
+}
+
+// DiscoverPatternsInWindow performs pattern discovery for anchors within a specific time window (for batch processing)
+func (a *DiscoveryAgent) DiscoverPatternsInWindow(
+	ctx context.Context,
+	minAnchors int,
+	windowStart, windowEnd time.Time,
+) (int, error) {
+	if err := a.discoverPatternsInWindow(ctx, minAnchors, windowStart, windowEnd); err != nil {
+		return 0, err
+	}
+	// TODO: Return actual count of patterns created
+	return 0, nil
+}
+
+// discoverPatternsInWindow performs pattern discovery from anchors within a time window
+func (a *DiscoveryAgent) discoverPatternsInWindow(
+	ctx context.Context,
+	minAnchors int,
+	windowStart, windowEnd time.Time,
+) error {
+	startTime := a.timeManager.Now()
+
+	a.logger.Info("Starting pattern discovery in window",
+		"min_anchors", minAnchors,
+		"window_start", windowStart,
+		"window_end", windowEnd)
+
+	// Get anchors with computed distances within the time window
+	anchors, err := a.storage.GetAnchorsWithDistancesInWindow(ctx, windowStart, windowEnd)
+	if err != nil {
+		return fmt.Errorf("failed to get anchors: %w", err)
+	}
+
+	if len(anchors) < minAnchors {
+		a.logger.Info("Insufficient anchors for pattern discovery",
+			"found", len(anchors),
+			"required", minAnchors)
+		a.publishCompletion(0)
+		return nil
+	}
+
+	a.logger.Info("Clustering anchors in window", "count", len(anchors))
+
+	// Use the same multi-stage clustering logic as discoverPatterns
+	var validClusters []*clustering.Cluster
+
+	if a.config.TemporalGroupingEnabled {
+		// STAGE 1: Temporal Grouping
+		groups := GroupByTimeWindow(anchors, a.config.TemporalGroupingWindow)
+
+		a.logger.Info("Temporal grouping complete",
+			"groups_created", len(groups),
+			"window_size", a.config.TemporalGroupingWindow)
+
+		// STAGE 2 & 3: Detect parallelism and cluster adaptively
+		for i, group := range groups {
+			if len(group.Anchors) < minAnchors {
+				continue
+			}
+
+			overlapThreshold := time.Duration(float64(a.config.TemporalGroupingWindow) * a.config.TemporalGroupingOverlapRatio)
+			isParallel := DetectParallelism(group, overlapThreshold)
+			locations := GetUniqueLocations(group)
+
+			a.logger.Info("Analyzing temporal group",
+				"group_index", i,
+				"anchor_count", len(group.Anchors),
+				"is_parallel", isParallel)
+
+			if isParallel {
+				for _, location := range locations {
+					locationAnchors := FilterByLocation(group, location)
+					if len(locationAnchors) < minAnchors {
+						continue
+					}
+
+					anchorIDs := make([]uuid.UUID, len(locationAnchors))
+					for j, anchor := range locationAnchors {
+						anchorIDs[j] = anchor.ID
+					}
+
+					clusters, err := a.clustering.ClusterAnchors(ctx, anchorIDs)
+					if err != nil {
+						a.logger.Error("Clustering failed", "error", err)
+						continue
+					}
+
+					for _, cluster := range clusters {
+						if !cluster.Noise && len(cluster.Members) >= minAnchors {
+							validClusters = append(validClusters, cluster)
+						}
+					}
+				}
+			} else {
+				anchorIDs := make([]uuid.UUID, len(group.Anchors))
+				for j, anchor := range group.Anchors {
+					anchorIDs[j] = anchor.ID
+				}
+
+				clusters, err := a.clustering.ClusterAnchors(ctx, anchorIDs)
+				if err != nil {
+					a.logger.Error("Clustering failed", "error", err)
+					continue
+				}
+
+				for _, cluster := range clusters {
+					if !cluster.Noise && len(cluster.Members) >= minAnchors {
+						validClusters = append(validClusters, cluster)
+					}
+				}
+			}
+		}
+	} else {
+		// Single-stage clustering
+		anchorIDs := make([]uuid.UUID, len(anchors))
+		for i, anchor := range anchors {
+			anchorIDs[i] = anchor.ID
+		}
+
+		clusters, err := a.clustering.ClusterAnchors(ctx, anchorIDs)
+		if err != nil {
+			return fmt.Errorf("clustering failed: %w", err)
+		}
+
+		for _, cluster := range clusters {
+			if !cluster.Noise && len(cluster.Members) >= minAnchors {
+				validClusters = append(validClusters, cluster)
+			}
+		}
+	}
+
+	a.logger.Info("Valid clusters found", "count", len(validClusters))
+
+	if len(validClusters) == 0 {
+		a.publishCompletion(0)
+		return nil
+	}
+
+	// Interpret and create patterns
+	patternsCreated := 0
+	for _, cluster := range validClusters {
+		pattern, err := a.interpreter.InterpretCluster(ctx, cluster.Members)
+		if err != nil {
+			a.logger.Error("Failed to interpret cluster", "error", err)
+			continue
+		}
+
+		if err := a.storage.CreatePattern(ctx, pattern); err != nil {
+			a.logger.Error("Failed to store pattern", "error", err)
+			continue
+		}
+
+		for _, anchorID := range cluster.Members {
+			if err := a.storage.UpdateAnchorPattern(ctx, anchorID, pattern.ID); err != nil {
+				a.logger.Warn("Failed to update anchor pattern", "error", err)
+			}
+		}
+
+		patternsCreated++
+	}
+
+	duration := time.Since(startTime)
+	a.logger.Info("Pattern discovery in window completed",
+		"patterns_created", patternsCreated,
+		"duration", duration)
+
+	a.publishCompletion(patternsCreated)
+	return nil
+}
+
 // discoverPatterns performs pattern discovery from recent anchors
 func (a *DiscoveryAgent) discoverPatterns(ctx context.Context, minAnchors, lookbackHours int) error {
 	startTime := a.timeManager.Now()

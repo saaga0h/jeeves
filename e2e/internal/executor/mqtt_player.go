@@ -206,17 +206,27 @@ func (p *MQTTPlayer) PublishBehaviorEvent(location string, data map[string]inter
 	// Determine the topic based on the action
 	topic := "automation/behavior/consolidate" // default
 
+	p.logger.Printf("DEBUG: Before topic routing - data[action]=%v (type: %T)", data["action"], data["action"])
 	if action, ok := data["action"].(string); ok {
+		p.logger.Printf("DEBUG: Type assertion succeeded, action='%s'", action)
 		switch action {
 		case "consolidate":
 			topic = "automation/behavior/consolidate"
+			p.logger.Printf("DEBUG: Set topic to consolidate")
 		case "compute_distances":
 			topic = "automation/behavior/compute_distances"
+			p.logger.Printf("DEBUG: Set topic to compute_distances")
 		case "discover_patterns":
 			topic = "automation/behavior/discover_patterns"
+			p.logger.Printf("DEBUG: Set topic to discover_patterns")
+		case "process_batch":
+			topic = "automation/behavior/process_batch"
+			p.logger.Printf("DEBUG: Set topic to process_batch")
 		default:
 			p.logger.Printf("WARNING: Unknown action '%s', using consolidate topic", action)
 		}
+	} else {
+		p.logger.Printf("DEBUG: Type assertion FAILED for data[action]=%v (type: %T)", data["action"], data["action"])
 	}
 
 	// Create the payload with location context

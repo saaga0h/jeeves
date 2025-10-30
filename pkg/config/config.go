@@ -87,6 +87,14 @@ type Config struct {
 	TemporalGroupingEnabled       bool
 	TemporalGroupingWindowMinutes int     // Window size in minutes for temporal grouping
 	TemporalGroupingOverlapRatio  float64 // Overlap threshold (0.0-1.0) for parallelism detection
+
+	// Batch Processing configuration (sliding window)
+	BatchProcessingEnabled  bool          // Enable sliding window batch processing
+	BatchDuration           time.Duration // Duration of each batch window (e.g., 2 hours)
+	BatchOverlap            time.Duration // Overlap duration between batches (e.g., 30 minutes)
+	BatchScheduleEnabled    bool          // Enable automatic batch scheduling (vs manual MQTT trigger)
+	BatchScheduleInterval   time.Duration // Interval between automatic batch runs
+	BatchMetadataEnabled    bool          // Store batch metadata (batch_id, timestamps) for debugging
 }
 
 // NewConfig creates a new Config with default values
@@ -151,6 +159,13 @@ func NewConfig() *Config {
 		TemporalGroupingEnabled:       true,
 		TemporalGroupingWindowMinutes: 60,  // 60 minute window (better for longer activities)
 		TemporalGroupingOverlapRatio:  0.5, // 50% overlap = parallel
+		// Batch Processing defaults
+		BatchProcessingEnabled:  false,          // Disabled by default, use traditional approach
+		BatchDuration:           2 * time.Hour,  // 2 hour batch windows
+		BatchOverlap:            30 * time.Minute, // 30 minute overlap
+		BatchScheduleEnabled:    false,          // Manual MQTT trigger by default
+		BatchScheduleInterval:   2 * time.Hour,  // Run every 2 hours if enabled
+		BatchMetadataEnabled:    true,           // Store metadata for debugging
 	}
 }
 
@@ -401,6 +416,38 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("JEEVES_TEMPORAL_GROUPING_OVERLAP_RATIO"); v != "" {
 		if ratio, err := strconv.ParseFloat(v, 64); err == nil {
 			c.TemporalGroupingOverlapRatio = ratio
+		}
+	}
+
+	// Batch Processing configuration
+	if v := os.Getenv("JEEVES_BATCH_PROCESSING_ENABLED"); v != "" {
+		if enabled, err := strconv.ParseBool(v); err == nil {
+			c.BatchProcessingEnabled = enabled
+		}
+	}
+	if v := os.Getenv("JEEVES_BATCH_DURATION"); v != "" {
+		if duration, err := time.ParseDuration(v); err == nil {
+			c.BatchDuration = duration
+		}
+	}
+	if v := os.Getenv("JEEVES_BATCH_OVERLAP"); v != "" {
+		if overlap, err := time.ParseDuration(v); err == nil {
+			c.BatchOverlap = overlap
+		}
+	}
+	if v := os.Getenv("JEEVES_BATCH_SCHEDULE_ENABLED"); v != "" {
+		if enabled, err := strconv.ParseBool(v); err == nil {
+			c.BatchScheduleEnabled = enabled
+		}
+	}
+	if v := os.Getenv("JEEVES_BATCH_SCHEDULE_INTERVAL"); v != "" {
+		if interval, err := time.ParseDuration(v); err == nil {
+			c.BatchScheduleInterval = interval
+		}
+	}
+	if v := os.Getenv("JEEVES_BATCH_METADATA_ENABLED"); v != "" {
+		if enabled, err := strconv.ParseBool(v); err == nil {
+			c.BatchMetadataEnabled = enabled
 		}
 	}
 }
