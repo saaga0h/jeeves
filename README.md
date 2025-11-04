@@ -32,9 +32,10 @@ jeeves/
 │   └── occupancy-agent/
 ├── internal/                   # Agent-specific implementations
 │   ├── collector/             # Fully implemented
-│   ├── illuminance/           # Stub (TODO)
-│   ├── light/                 # Stub (TODO)
-│   └── occupancy/             # Stub (TODO)
+│   ├── illuminance/           # Fully implemented
+│   ├── light/                 # Fully implemented
+│   ├── occupancy/             # Fully implemented
+│   └── behavior/              # work-in-progress
 ├── pkg/                       # Shared infrastructure packages
 │   ├── config/               # Configuration management
 │   ├── mqtt/                 # MQTT client wrapper
