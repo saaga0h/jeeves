@@ -1,6 +1,7 @@
 package embedding
 
 import (
+	"context"
 	"math"
 	"time"
 
@@ -8,6 +9,9 @@ import (
 
 	"github.com/saaga0h/jeeves-platform/internal/behavior/types"
 )
+
+// Global location embedding storage (set during initialization)
+var locationEmbeddingStorage *LocationEmbeddingStorage
 
 // ComputeSemanticEmbedding generates a 128-dimensional semantic tensor
 // representing an anchor's position in behavioral space.
@@ -121,30 +125,43 @@ func encodeTimeOfDay(t time.Time) float32 {
 	}
 }
 
-// encodeLocation converts location string to 16-dimensional vector
-// Uses FNV-1a hash for deterministic encoding
+// encodeLocation converts location string to 16-dimensional semantic vector
+// Uses dynamic LLM-based classification with DB caching
 func encodeLocation(location string) []float32 {
-	vec := make([]float32, 16)
-
-	// FNV-1a hash for deterministic location encoding
-	hash := fnv1aHash(location)
-
-	// Extract 16 values from hash, normalized to [-0.5, 0.5]
-	for i := 0; i < 16; i++ {
-		vec[i] = float32((hash>>(i*4))&15)/15.0 - 0.5
+	// If storage is available, use dynamic embeddings
+	if locationEmbeddingStorage != nil {
+		ctx := context.Background()
+		embedding, err := locationEmbeddingStorage.GetEmbedding(ctx, location)
+		if err == nil {
+			return embedding
+		}
+		// Log error but continue to fallback
 	}
 
-	return vec
+	// Fallback: Use seed embeddings (will be moved to DB during initialization)
+	locationEmbeddings := map[string][]float32{
+		"bedroom": {0.9, 1.0, 0.0, 0.0, 0.1, 0.9, 0.1, 0.0, 0.9, 0.1, 0.0, 0.8, 0.2, 0.1, 0.0, 0.0},
+		"bathroom": {0.9, 0.0, 0.0, 0.0, 1.0, 0.1, 0.6, 0.3, 0.9, 0.1, 0.0, 0.5, 0.7, 0.6, 0.4, 0.0},
+		"kitchen": {0.1, 0.0, 0.8, 0.2, 0.3, 0.0, 0.2, 0.8, 0.2, 0.8, 0.3, 0.9, 0.8, 0.5, 0.6, 0.0},
+		"dining_room": {0.1, 0.0, 0.0, 0.9, 0.2, 0.9, 0.1, 0.0, 0.1, 0.9, 0.5, 0.8, 0.4, 0.7, 0.3, 0.0},
+		"living_room": {0.2, 0.2, 0.0, 0.9, 0.1, 0.8, 0.2, 0.0, 0.1, 0.7, 0.7, 0.6, 0.5, 0.8, 0.4, 0.0},
+		"study": {0.6, 0.2, 0.9, 0.0, 0.1, 0.8, 0.2, 0.0, 0.7, 0.3, 0.0, 0.6, 0.3, 0.2, 0.7, 0.0},
+		"office": {0.7, 0.0, 1.0, 0.0, 0.1, 0.8, 0.2, 0.0, 0.9, 0.1, 0.0, 0.6, 0.3, 0.2, 0.8, 0.0},
+		"hallway": {0.4, 0.0, 0.0, 0.0, 0.9, 0.1, 0.5, 0.4, 0.6, 0.4, 0.2, 0.2, 0.3, 0.5, 0.6, 0.0},
+	}
+
+	// Return embedding if exists in fallback
+	if embedding, exists := locationEmbeddings[location]; exists {
+		return embedding
+	}
+
+	// Unknown location: return neutral vector (all dimensions at 0.5)
+	return GenerateFallbackEmbedding(location)
 }
 
-// fnv1aHash computes FNV-1a hash (deterministic, good distribution)
-func fnv1aHash(s string) uint64 {
-	var h uint64 = 14695981039346656037 // FNV offset basis
-	for _, c := range s {
-		h ^= uint64(c)
-		h *= 1099511628211 // FNV prime
-	}
-	return h
+// SetLocationEmbeddingStorage sets the global location embedding storage
+func SetLocationEmbeddingStorage(storage *LocationEmbeddingStorage) {
+	locationEmbeddingStorage = storage
 }
 
 // encodeWeather extracts weather dimensions from context

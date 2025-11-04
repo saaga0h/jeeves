@@ -1,0 +1,456 @@
+name: "Parallel Activities - TV Watching vs Working"
+description: "Test two-phase clustering with simultaneous but different activities. Validates that same-location clustering separates parallel activities."
+
+test_mode:
+  virtual_start: "2025-10-30T18:00:00Z"
+  time_scale: 10  # 10x time scale for faster testing
+
+setup:
+  location: "universe"
+  initial_state:
+    pattern_discovery_enabled: true
+    pattern_distance_strategy: "progressive_learned"
+    pattern_distance_batch_size: 100
+    batch_processing_enabled: false  # Process all anchors in single discovery run
+    batch_duration: "168h"
+    batch_overlap: "1h"
+    progressive_activity_embeddings: true  # Enable LLM-based activity embeddings
+
+events:
+  # ===============================================
+  # ROUTINE 1: First Evening (18:00-20:30)
+  # Pattern A: TV Watching (18:00-20:00)
+  # Pattern B: Working in Study (18:30-20:30)
+  # ===============================================
+
+  # === Pattern A: TV Watching starts (18:00) ===
+  - time: 0
+    sensor: "motion:living_room"
+    value: true
+    description: "Routine 1: Enter living room for TV"
+
+  - time: 30
+    type: lighting
+    location: living_room
+    description: "Routine 1: Dim living room lights for TV"
+    data:
+      state: "on"
+      brightness: 30
+      source: "manual"
+      timestamp: "2025-10-30T18:00:30Z"
+
+  - time: 60
+    type: media
+    location: living_room
+    description: "Routine 1: Turn on TV"
+    data:
+      device: "tv"
+      state: "on"
+      source: "netflix"
+      timestamp: "2025-10-30T18:01:00Z"
+
+  # Continuous presence in living room
+  - time: 300
+    sensor: "motion:living_room"
+    value: true
+    description: "Routine 1: Still watching TV"
+
+  - time: 900
+    sensor: "motion:living_room"
+    value: true
+    description: "Routine 1: Still watching TV"
+
+  - time: 1500
+    sensor: "motion:living_room"
+    value: true
+    description: "Routine 1: Still watching TV"
+
+  # === Pattern B: Working starts (18:30 - 30min overlap) ===
+  - time: 1800
+    sensor: "motion:study"
+    value: true
+    description: "Routine 1: Enter study to work"
+
+  - time: 1830
+    type: lighting
+    location: study
+    description: "Routine 1: Turn on bright desk light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T18:30:30Z"
+
+  # Intermittent motion (typing, moving)
+  - time: 2100
+    sensor: "motion:study"
+    value: true
+    description: "Routine 1: Working at desk"
+
+  - time: 2700
+    sensor: "motion:study"
+    value: true
+    description: "Routine 1: Working at desk"
+
+  - time: 3300
+    sensor: "motion:study"
+    value: true
+    description: "Routine 1: Working at desk"
+
+  - time: 3900
+    sensor: "motion:study"
+    value: true
+    description: "Routine 1: Working at desk"
+
+  # === Pattern A ends (20:00) ===
+  - time: 4500
+    type: media
+    location: living_room
+    description: "Routine 1: Turn off TV"
+    data:
+      device: "tv"
+      state: "off"
+      timestamp: "2025-10-30T19:55:00Z"
+
+  - time: 4530
+    type: lighting
+    location: living_room
+    description: "Routine 1: Turn off living room lights"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T19:55:30Z"
+
+  # === Pattern B continues and ends (20:30) ===
+  - time: 5100
+    sensor: "motion:study"
+    value: true
+    description: "Routine 1: Still working"
+
+  - time: 5700
+    type: lighting
+    location: study
+    description: "Routine 1: Turn off study light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T20:25:00Z"
+
+  # Consolidate after Routine 1
+  - time: 6000
+    type: behavior
+    location: universe
+    description: "Consolidate Routine 1"
+    data:
+      action: "consolidate"
+      lookback_hours: 3
+
+  # ===============================================
+  # ROUTINE 2: Second Evening (20:45-23:15)
+  # Same parallel patterns, slightly different timing
+  # ===============================================
+
+  # === Pattern A: TV Watching starts (20:45) ===
+  - time: 6300
+    sensor: "motion:living_room"
+    value: true
+    description: "Routine 2: Enter living room for TV"
+
+  - time: 6330
+    type: lighting
+    location: living_room
+    description: "Routine 2: Dim living room lights for TV"
+    data:
+      state: "on"
+      brightness: 30
+      source: "manual"
+      timestamp: "2025-10-30T20:45:30Z"
+
+  - time: 6360
+    type: media
+    location: living_room
+    description: "Routine 2: Turn on TV"
+    data:
+      device: "tv"
+      state: "on"
+      source: "netflix"
+      timestamp: "2025-10-30T20:46:00Z"
+
+  - time: 6600
+    sensor: "motion:living_room"
+    value: true
+    description: "Routine 2: Still watching TV"
+
+  - time: 7200
+    sensor: "motion:living_room"
+    value: true
+    description: "Routine 2: Still watching TV"
+
+  - time: 7800
+    sensor: "motion:living_room"
+    value: true
+    description: "Routine 2: Still watching TV"
+
+  # === Pattern B: Working starts (21:15 - 30min overlap) ===
+  - time: 7500
+    sensor: "motion:study"
+    value: true
+    description: "Routine 2: Enter study to work"
+
+  - time: 7530
+    type: lighting
+    location: study
+    description: "Routine 2: Turn on bright desk light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T21:15:30Z"
+
+  - time: 7800
+    sensor: "motion:study"
+    value: true
+    description: "Routine 2: Working at desk"
+
+  - time: 8400
+    sensor: "motion:study"
+    value: true
+    description: "Routine 2: Working at desk"
+
+  - time: 9000
+    sensor: "motion:study"
+    value: true
+    description: "Routine 2: Working at desk"
+
+  - time: 9600
+    sensor: "motion:study"
+    value: true
+    description: "Routine 2: Working at desk"
+
+  # === Pattern A ends (22:45) ===
+  - time: 10200
+    type: media
+    location: living_room
+    description: "Routine 2: Turn off TV"
+    data:
+      device: "tv"
+      state: "off"
+      timestamp: "2025-10-30T22:40:00Z"
+
+  - time: 10230
+    type: lighting
+    location: living_room
+    description: "Routine 2: Turn off living room lights"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T22:40:30Z"
+
+  # === Pattern B continues and ends (23:15) ===
+  - time: 10800
+    sensor: "motion:study"
+    value: true
+    description: "Routine 2: Still working"
+
+  - time: 11400
+    type: lighting
+    location: study
+    description: "Routine 2: Turn off study light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T23:10:00Z"
+
+  # Consolidate after Routine 2
+  - time: 11700
+    type: behavior
+    location: universe
+    description: "Consolidate Routine 2"
+    data:
+      action: "consolidate"
+      lookback_hours: 3
+
+  # ===============================================
+  # ROUTINE 3: Third Evening (Next day 18:15-20:45)
+  # Same patterns to establish learned behavior
+  # ===============================================
+
+  # === Pattern A: TV Watching starts (18:15) ===
+  - time: 12300
+    sensor: "motion:living_room"
+    value: true
+    description: "Routine 3: Enter living room for TV"
+
+  - time: 12330
+    type: lighting
+    location: living_room
+    description: "Routine 3: Dim living room lights for TV"
+    data:
+      state: "on"
+      brightness: 30
+      source: "manual"
+      timestamp: "2025-10-31T18:15:30Z"
+
+  - time: 12360
+    type: media
+    location: living_room
+    description: "Routine 3: Turn on TV"
+    data:
+      device: "tv"
+      state: "on"
+      source: "netflix"
+      timestamp: "2025-10-31T18:16:00Z"
+
+  - time: 12600
+    sensor: "motion:living_room"
+    value: true
+    description: "Routine 3: Still watching TV"
+
+  - time: 13200
+    sensor: "motion:living_room"
+    value: true
+    description: "Routine 3: Still watching TV"
+
+  - time: 13800
+    sensor: "motion:living_room"
+    value: true
+    description: "Routine 3: Still watching TV"
+
+  # === Pattern B: Working starts (18:45 - 30min overlap) ===
+  - time: 13500
+    sensor: "motion:study"
+    value: true
+    description: "Routine 3: Enter study to work"
+
+  - time: 13530
+    type: lighting
+    location: study
+    description: "Routine 3: Turn on bright desk light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-31T18:45:30Z"
+
+  - time: 13800
+    sensor: "motion:study"
+    value: true
+    description: "Routine 3: Working at desk"
+
+  - time: 14400
+    sensor: "motion:study"
+    value: true
+    description: "Routine 3: Working at desk"
+
+  - time: 15000
+    sensor: "motion:study"
+    value: true
+    description: "Routine 3: Working at desk"
+
+  - time: 15600
+    sensor: "motion:study"
+    value: true
+    description: "Routine 3: Working at desk"
+
+  # === Pattern A ends (20:15) ===
+  - time: 16200
+    type: media
+    location: living_room
+    description: "Routine 3: Turn off TV"
+    data:
+      device: "tv"
+      state: "off"
+      timestamp: "2025-10-31T20:10:00Z"
+
+  - time: 16230
+    type: lighting
+    location: living_room
+    description: "Routine 3: Turn off living room lights"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-31T20:10:30Z"
+
+  # === Pattern B continues and ends (20:45) ===
+  - time: 16800
+    sensor: "motion:study"
+    value: true
+    description: "Routine 3: Still working"
+
+  - time: 17400
+    type: lighting
+    location: study
+    description: "Routine 3: Turn off study light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-31T20:40:00Z"
+
+  # Consolidate after Routine 3
+  - time: 17700
+    type: behavior
+    location: universe
+    description: "Consolidate Routine 3"
+    data:
+      action: "consolidate"
+      lookback_hours: 3
+
+  # === Manual Pattern Discovery Trigger ===
+  - time: 18000
+    type: behavior
+    location: universe
+    description: "Trigger pattern discovery on all anchors"
+    data:
+      action: "discover_patterns"
+      min_anchors: 3
+      lookback_hours: 168
+
+wait:
+  - time: 18300
+    description: "Wait for pattern discovery to complete"
+
+expectations:
+  postgres:
+    # Check we have two distinct patterns
+    - time: 18300
+      postgres_query: "SELECT COUNT(DISTINCT id) FROM behavioral_patterns WHERE cluster_size >= 10"
+      postgres_expected: ">=2"
+      description: "Two distinct patterns (TV watching + Working)"
+
+    # Check all anchors are clustered (0% outliers)
+    - time: 18300
+      postgres_query: |
+        SELECT COUNT(*) - COUNT(pattern_id)
+        FROM semantic_anchors
+      postgres_expected: "0"
+      description: "All anchors clustered (0% outliers)"
+
+    # Check living_room pattern exists
+    - time: 18300
+      postgres_query: |
+        SELECT COUNT(*) FROM behavioral_patterns
+        WHERE 'living_room' = ANY(locations)
+      postgres_expected: ">=1"
+      description: "Living room pattern exists (TV watching)"
+
+    # Check study pattern exists
+    - time: 18300
+      postgres_query: |
+        SELECT COUNT(*) FROM behavioral_patterns
+        WHERE 'study' = ANY(locations)
+      postgres_expected: ">=1"
+      description: "Study pattern exists (Working)"
+
+    # Verify progressive learning worked
+    - time: 18300
+      postgres_query: |
+        SELECT COUNT(*) FROM learned_patterns
+      postgres_expected: ">=5"
+      description: "Learned patterns established"
+
+    # Check pattern quality
+    - time: 18300
+      postgres_query: |
+        SELECT COUNT(*) FROM semantic_anchors WHERE pattern_id IS NOT NULL
+      postgres_expected: ">=30"
+      description: "At least 30 anchors in patterns"

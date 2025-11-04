@@ -2,6 +2,7 @@ package distance
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
 
 	"github.com/saaga0h/jeeves-platform/internal/behavior/storage"
@@ -45,7 +47,14 @@ type ComputationAgent struct {
 	testMode     bool
 	testTriggers chan TriggerEvent
 
-	// Learned distance patterns
+	// Learned patterns with temporal decay (NEW!)
+	learnedPatternStorage *LearnedPatternStorage
+	learnedPatternConfig  LearnedPatternConfig
+	patternCache          map[string]*LearnedPattern // In-memory cache
+	observationCache      map[string][]Observation   // In-memory cache
+	cacheMutex            sync.RWMutex
+
+	// Legacy learned distance patterns (deprecated, keeping for compatibility)
 	learnedDistances map[string]float64
 	learnedMutex     sync.RWMutex
 
@@ -80,7 +89,16 @@ func NewComputationAgent(
 		learnedDistances:    make(map[string]float64),
 		patternObservations: make(map[string][]float64),
 		uncertainQueue:      make([][2]*types.SemanticAnchor, 0),
+		patternCache:        make(map[string]*LearnedPattern),
+		observationCache:    make(map[string][]Observation),
+		learnedPatternConfig: DefaultLearnedPatternConfig(),
+		// Note: learnedPatternStorage will be set via SetLearnedPatternStorage() after construction
 	}
+}
+
+// SetLearnedPatternStorage sets the learned pattern storage (called after agent creation)
+func (a *ComputationAgent) SetLearnedPatternStorage(db *sql.DB) {
+	a.learnedPatternStorage = NewLearnedPatternStorage(db, a.logger)
 }
 
 // EnableTestMode switches to test mode (trigger-based instead of interval-based)
@@ -295,15 +313,15 @@ func (a *ComputationAgent) computeDistance(
 	}
 }
 
-// computeVectorDistance calculates cosine distance between embeddings
+// computeVectorDistance calculates structured distance between embeddings
 func (a *ComputationAgent) computeVectorDistance(
 	anchor1, anchor2 *types.SemanticAnchor,
 ) (float64, string, error) {
 
-	// Cosine distance = 1 - cosine_similarity
-	distance := cosineDist(anchor1.SemanticEmbedding, anchor2.SemanticEmbedding)
+	// Use structured distance that respects semantic blocks
+	distance := structuredDist(anchor1.SemanticEmbedding, anchor2.SemanticEmbedding)
 
-	a.logger.Debug("Computed vector distance",
+	a.logger.Debug("Computed structured vector distance",
 		"anchor1", anchor1.ID,
 		"anchor2", anchor2.ID,
 		"distance", distance)
@@ -326,14 +344,123 @@ func cosineDist(v1, v2 pgvector.Vector) float64 {
 	return math.Max(0, math.Min(1, distance))
 }
 
+// structuredDist computes distance using block-wise metrics for 128D structured tensor
+// Embedding structure:
+// [0-3]:   Temporal cyclical (hour, day of week)
+// [4-7]:   Seasonal cyclical (day of year, month)
+// [8-11]:  Day type (weekday/weekend/holiday, time period)
+// [12-27]: Spatial (location embedding)
+// [28-43]: Weather context
+// [44-59]: Lighting context
+// [60-79]: Activity signals
+// [80-95]: Household rhythm
+// [96-127]: Reserved for learned features
+func structuredDist(v1, v2 pgvector.Vector) float64 {
+	s1 := v1.Slice()
+	s2 := v2.Slice()
+
+	// 1. Temporal distance (cyclic, dimensions 0-3)
+	temporalDist := cyclicDistance(s1[0:4], s2[0:4])
+
+	// 2. Seasonal distance (cyclic, dimensions 4-7)
+	seasonalDist := cyclicDistance(s1[4:8], s2[4:8])
+
+	// 3. Day type distance (categorical, dimensions 8-11)
+	dayTypeDist := euclideanDistance(s1[8:12], s2[8:12])
+
+	// 4. Spatial/Location distance (semantic, dimensions 12-27)
+	// Use cosine for LLM-derived embeddings
+	spatialDist := 1.0 - cosineSimilaritySlice(s1[12:28], s2[12:28])
+
+	// 5. Weather distance (continuous, dimensions 28-43)
+	weatherDist := euclideanDistance(s1[28:44], s2[28:44])
+
+	// 6. Lighting distance (dimensions 44-59)
+	lightingDist := euclideanDistance(s1[44:60], s2[44:60])
+
+	// 7. Activity signals (dimensions 60-79)
+	activityDist := euclideanDistance(s1[60:80], s2[60:80])
+
+	// 8. Household rhythm (dimensions 80-95)
+	rhythmDist := euclideanDistance(s1[80:96], s2[80:96])
+
+	// Weighted combination
+	// Location and activity are most important for semantic distance
+	distance := 0.10*temporalDist +
+		0.05*seasonalDist +
+		0.10*dayTypeDist +
+		0.30*spatialDist +
+		0.05*weatherDist +
+		0.10*lightingDist +
+		0.25*activityDist +
+		0.05*rhythmDist
+
+	return math.Max(0, math.Min(1, distance))
+}
+
+// cyclicDistance computes distance for cyclic dimensions (sin/cos encoded)
+func cyclicDistance(v1, v2 []float32) float64 {
+	// For sin/cos pairs, compute angular distance
+	// Assuming pairs: [sin1, cos1, sin2, cos2, ...]
+	var totalDist float64
+	pairs := len(v1) / 2
+
+	for i := 0; i < pairs; i++ {
+		sin1 := float64(v1[i*2])
+		cos1 := float64(v1[i*2+1])
+		sin2 := float64(v2[i*2])
+		cos2 := float64(v2[i*2+1])
+
+		// Dot product of unit vectors gives cos(angle)
+		dotProd := sin1*sin2 + cos1*cos2
+		// Clamp to [-1, 1] to handle floating point errors
+		dotProd = math.Max(-1.0, math.Min(1.0, dotProd))
+
+		// Angular distance: acos(dot) / π to normalize to [0, 1]
+		angle := math.Acos(dotProd)
+		totalDist += angle / math.Pi
+	}
+
+	return totalDist / float64(pairs)
+}
+
+// euclideanDistance computes normalized Euclidean distance
+func euclideanDistance(v1, v2 []float32) float64 {
+	var sum float64
+	for i := 0; i < len(v1); i++ {
+		diff := float64(v1[i]) - float64(v2[i])
+		sum += diff * diff
+	}
+	// Normalize by sqrt(dimensions) to get range roughly [0, 1]
+	// Since embeddings are normalized, max distance is sqrt(2)
+	distance := math.Sqrt(sum) / math.Sqrt(2.0)
+	return math.Min(1.0, distance)
+}
+
+// cosineSimilaritySlice computes cosine similarity for a slice
+func cosineSimilaritySlice(v1, v2 []float32) float64 {
+	var dot, mag1, mag2 float64
+	for i := 0; i < len(v1); i++ {
+		dot += float64(v1[i]) * float64(v2[i])
+		mag1 += float64(v1[i]) * float64(v1[i])
+		mag2 += float64(v2[i]) * float64(v2[i])
+	}
+
+	if mag1 == 0 || mag2 == 0 {
+		return 0
+	}
+
+	return dot / (math.Sqrt(mag1) * math.Sqrt(mag2))
+}
+
 // computeHybridDistance uses vector for clear cases, LLM for ambiguous ones
 func (a *ComputationAgent) computeHybridDistance(
 	ctx context.Context,
 	anchor1, anchor2 *types.SemanticAnchor,
 ) (float64, string, error) {
 
-	// Always compute vector distance first (it's fast)
-	vectorDist := cosineDist(anchor1.SemanticEmbedding, anchor2.SemanticEmbedding)
+	// Always compute structured vector distance first (it's fast)
+	vectorDist := structuredDist(anchor1.SemanticEmbedding, anchor2.SemanticEmbedding)
 
 	sameLocation := anchor1.Location == anchor2.Location
 
@@ -419,7 +546,143 @@ func isAdjacentLocations(loc1, loc2 string) bool {
 	return false
 }
 
-// computeProgressiveLearnedDistance implements progressive learning strategy
+// SimilarPairCandidate represents a similar pair found in the database
+type SimilarPairCandidate struct {
+	Anchor1ID      uuid.UUID
+	Anchor2ID      uuid.UUID
+	Distance       float64
+	Source         string
+	ComputedAt     time.Time
+	Location1      string
+	Location2      string
+	Timestamp1     time.Time
+	Timestamp2     time.Time
+	VectorDistance float64
+}
+
+// findSimilarComputedPairs searches DB for similar pairs with LLM distances
+func (a *ComputationAgent) findSimilarComputedPairs(
+	ctx context.Context,
+	anchor1, anchor2 *types.SemanticAnchor,
+	vectorDist float64,
+) ([]SimilarPairCandidate, error) {
+	if a.learnedPatternStorage == nil {
+		return nil, fmt.Errorf("learned pattern storage not initialized")
+	}
+
+	// Determine location adjacency type for filtering
+	sameLocation := anchor1.Location == anchor2.Location
+	adjacent := isAdjacentLocations(anchor1.Location, anchor2.Location)
+
+	// Calculate time gap (in minutes) between anchors
+	timeGap := math.Abs(anchor2.Timestamp.Sub(anchor1.Timestamp).Minutes())
+
+	// Query for similar pairs from the view
+	query := `
+		SELECT
+			anchor1_id, anchor2_id, distance, source, computed_at,
+			location1, location2, timestamp1, timestamp2,
+			1 - vector_similarity as vector_distance
+		FROM recent_llm_distances
+		WHERE
+			-- Similar vector distance (±0.15 tolerance)
+			ABS(1 - vector_similarity - $1) < 0.15
+			-- Same location pattern
+			AND (
+				-- Both same location
+				($2 = true AND location1 = location2)
+				-- Both adjacent locations
+				OR ($3 = true AND location1 != location2 AND is_adjacent(location1, location2))
+				-- Both distant locations
+				OR ($2 = false AND $3 = false AND location1 != location2 AND NOT is_adjacent(location1, location2))
+			)
+			-- Similar time gap (within 30 minutes)
+			AND ABS(EXTRACT(EPOCH FROM (timestamp2 - timestamp1))/60 - $4) < 30
+			-- Only high-quality LLM computations
+			AND source IN ('llm', 'llm_verify', 'llm_seed')
+		ORDER BY ABS(1 - vector_similarity - $1) ASC
+		LIMIT 10
+	`
+
+	rows, err := a.learnedPatternStorage.db.QueryContext(ctx, query,
+		vectorDist, sameLocation, adjacent, timeGap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query similar pairs: %w", err)
+	}
+	defer rows.Close()
+
+	var candidates []SimilarPairCandidate
+	for rows.Next() {
+		var c SimilarPairCandidate
+		err := rows.Scan(
+			&c.Anchor1ID,
+			&c.Anchor2ID,
+			&c.Distance,
+			&c.Source,
+			&c.ComputedAt,
+			&c.Location1,
+			&c.Location2,
+			&c.Timestamp1,
+			&c.Timestamp2,
+			&c.VectorDistance,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan similar pair: %w", err)
+		}
+		candidates = append(candidates, c)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating similar pairs: %w", err)
+	}
+
+	a.logger.Debug("Found similar pair candidates",
+		"anchor1", anchor1.ID,
+		"anchor2", anchor2.ID,
+		"vector_dist", vectorDist,
+		"candidates", len(candidates))
+
+	return candidates, nil
+}
+
+// checkSimilarityConsistency checks if similar pairs have consistent distances
+func (a *ComputationAgent) checkSimilarityConsistency(
+	candidates []SimilarPairCandidate,
+	maxStdDev float64,
+) (bool, float64) {
+	if len(candidates) < 2 {
+		return false, 0.0
+	}
+
+	// Calculate mean and standard deviation
+	sum := 0.0
+	for _, c := range candidates {
+		sum += c.Distance
+	}
+	mean := sum / float64(len(candidates))
+
+	variance := 0.0
+	for _, c := range candidates {
+		diff := c.Distance - mean
+		variance += diff * diff
+	}
+	variance = variance / float64(len(candidates))
+	stdDev := math.Sqrt(variance)
+
+	// Check consistency
+	consistent := stdDev <= maxStdDev
+
+	a.logger.Debug("Similarity consistency check",
+		"candidates", len(candidates),
+		"mean", mean,
+		"stddev", stdDev,
+		"max_stddev", maxStdDev,
+		"consistent", consistent)
+
+	return consistent, mean
+}
+
+// computeProgressiveLearnedDistance implements progressive learning strategy with temporal decay
 func (a *ComputationAgent) computeProgressiveLearnedDistance(
 	ctx context.Context,
 	anchor1, anchor2 *types.SemanticAnchor,
@@ -429,87 +692,194 @@ func (a *ComputationAgent) computeProgressiveLearnedDistance(
 	currentTotal := a.totalComputations
 	a.learnedMutex.Unlock()
 
-	// PHASE 1: Initial seeding (first ~50 computations)
-	// Use strategic sampling to build learned model
-	if currentTotal <= 50 {
+	now := a.timeManager.Now()
+
+	// ===========================================
+	// PHASE 1: Vector Screening (ALWAYS)
+	// ===========================================
+	// Fast structured distance screening to filter obvious cases
+	vectorDist := structuredDist(anchor1.SemanticEmbedding, anchor2.SemanticEmbedding)
+
+	// Very similar - high confidence, skip LLM (after initial seeding)
+	if vectorDist < 0.10 && currentTotal > 50 {
+		a.logger.Debug("Progressive: Vector screening - very similar",
+			"anchor1", anchor1.ID,
+			"anchor2", anchor2.ID,
+			"vector_dist", vectorDist)
+		return vectorDist, "vector_similar", nil
+	}
+
+	// Very different - high confidence, skip LLM
+	if vectorDist > 0.70 {
+		a.logger.Debug("Progressive: Vector screening - very different",
+			"anchor1", anchor1.ID,
+			"anchor2", anchor2.ID,
+			"vector_dist", vectorDist)
+		return vectorDist, "vector_different", nil
+	}
+
+	// Ambiguous range (0.10-0.70) - continue to learned pattern lookup
+
+	// ===========================================
+	// PHASE 2: Exact Pattern Lookup with Temporal Decay
+	// ===========================================
+	patternKey := generatePatternKey(anchor1, anchor2)
+
+	// Try cache first
+	a.cacheMutex.RLock()
+	cachedPattern, hasCached := a.patternCache[patternKey]
+	cachedObservations, hasObservations := a.observationCache[patternKey]
+	a.cacheMutex.RUnlock()
+
+	// Load from DB if not in cache
+	if !hasCached && a.learnedPatternStorage != nil {
+		pattern, observations, err := a.learnedPatternStorage.LoadPattern(ctx, patternKey)
+		if err == nil && pattern != nil {
+			// Prune old observations
+			observations = PruneObservations(observations, now, a.learnedPatternConfig)
+
+			// Recompute with temporal decay
+			weightedDistance, confidence := pattern.ComputeWeightedDistance(observations, now, a.learnedPatternConfig)
+			pattern.WeightedDistance = weightedDistance
+			pattern.ConfidenceScore = confidence
+			pattern.LastComputed = now
+
+			// Update cache
+			a.cacheMutex.Lock()
+			a.patternCache[patternKey] = pattern
+			a.observationCache[patternKey] = observations
+			a.cacheMutex.Unlock()
+
+			cachedPattern = pattern
+			cachedObservations = observations
+			hasCached = true
+			hasObservations = true
+		}
+	}
+
+	if hasCached && hasObservations && len(cachedObservations) > 0 {
+		// Recompute with current time (apply decay)
+		weightedDistance, confidence := cachedPattern.ComputeWeightedDistance(
+			cachedObservations, now, a.learnedPatternConfig)
+
+		if confidence >= a.learnedPatternConfig.HighConfidenceThreshold {
+			a.logger.Debug("Progressive: Exact pattern - high confidence",
+				"pattern_key", patternKey,
+				"confidence", confidence,
+				"distance", weightedDistance,
+				"observations", len(cachedObservations))
+
+			// IMPORTANT: Record the actual vector distance as an observation
+			// This allows the pattern to learn from real data and build variance
+			go a.recordObservationWithMetadata(ctx, anchor1, anchor2, vectorDist, "learned_reuse", vectorDist)
+
+			return weightedDistance, "learned_high_conf", nil
+		}
+
+		if confidence >= a.learnedPatternConfig.MediumConfidenceThreshold {
+			// Medium confidence - use but maybe queue for verification
+			a.logger.Debug("Progressive: Exact pattern - medium confidence",
+				"pattern_key", patternKey,
+				"confidence", confidence,
+				"distance", weightedDistance)
+
+			// IMPORTANT: Record the actual vector distance to update the pattern
+			go a.recordObservationWithMetadata(ctx, anchor1, anchor2, vectorDist, "learned_reuse", vectorDist)
+
+			// Check if confidence is dropping
+			if confidence < a.learnedPatternConfig.RelearnConfidenceThreshold*1.5 {
+				// Queue for re-learning if available
+				if a.learnedPatternStorage != nil {
+					_ = a.learnedPatternStorage.QueueForRelearning(ctx, patternKey,
+						"confidence_declining", 5, confidence, weightedDistance)
+				}
+			}
+
+			return weightedDistance, "learned_medium_conf", nil
+		}
+
+		// Low confidence - continue to similarity lookup
+	}
+
+	// ===========================================
+	// PHASE 3: Similarity-Based Cache Lookup (NEW!)
+	// ===========================================
+	// Only after building base library
+	if currentTotal > 100 && a.learnedPatternStorage != nil {
+		similarPairs, err := a.findSimilarComputedPairs(ctx, anchor1, anchor2, vectorDist)
+		if err == nil && len(similarPairs) >= 2 {
+			// Check consistency of similar pairs
+			consistent, avgDistance := a.checkSimilarityConsistency(similarPairs, 0.10)
+
+			if consistent {
+				a.logger.Debug("Progressive: Similarity-based cache hit",
+					"anchor1", anchor1.ID,
+					"anchor2", anchor2.ID,
+					"similar_pairs", len(similarPairs),
+					"avg_distance", avgDistance)
+
+				// Record this as an observation (with lower weight)
+				a.recordObservationWithMetadata(ctx, anchor1, anchor2, avgDistance,
+					"similarity_cached", vectorDist)
+
+				return avgDistance, "similarity_cached", nil
+			}
+		}
+	}
+
+	// ===========================================
+	// PHASE 4: Strategic LLM Computation
+	// ===========================================
+	// Use LLM for:
+	// 1. Initial seeding (first ~150 pairs - diverse sampling)
+	// 2. Novel patterns not in cache
+	// 3. Verification queue processing
+
+	shouldUseLLM := false
+	source := "llm"
+
+	// Initial seeding phase
+	if currentTotal <= 150 {
 		if a.shouldSampleForLearning(anchor1, anchor2) {
-			a.logger.Debug("Progressive: Phase 1 - LLM seeding",
+			shouldUseLLM = true
+			source = "llm_seed"
+			a.logger.Debug("Progressive: LLM seeding",
 				"computation", currentTotal,
 				"anchor1", anchor1.ID,
 				"anchor2", anchor2.ID)
-
-			dist, _, err := a.computeLLMDistance(ctx, anchor1, anchor2)
-			if err == nil {
-				a.recordObservation(anchor1, anchor2, dist)
-				return dist, "llm_seed", nil
-			}
-			// Fallback to vector if LLM fails
-			a.logger.Warn("LLM failed during seeding, using vector", "error", err)
-			return a.computeVectorDistance(anchor1, anchor2)
 		}
-
-		// Not selected for sampling, use vector
-		dist, _, err := a.computeVectorDistance(anchor1, anchor2)
-		return dist, "vector", err
+	} else {
+		// After seeding, use LLM for novel patterns
+		shouldUseLLM = true
+		a.logger.Debug("Progressive: Novel pattern - using LLM",
+			"pattern_key", patternKey,
+			"computation", currentTotal)
 	}
 
-	// PHASE 2: Learned model usage (51-400 computations)
-	// Use learned patterns with confidence scoring
-	if currentTotal <= 400 {
-		if dist, confidence := a.getLearnedDistanceWithConfidence(anchor1, anchor2); dist != nil {
-			if confidence >= 0.7 {
-				// High confidence - use learned distance
-				a.logger.Debug("Progressive: Phase 2 - high confidence learned",
-					"computation", currentTotal,
-					"confidence", confidence,
-					"distance", *dist)
-				return *dist, "learned", nil
-			}
-
-			// Medium confidence - queue for verification but use learned for now
-			a.logger.Debug("Progressive: Phase 2 - medium confidence, queuing",
-				"computation", currentTotal,
-				"confidence", confidence)
-			a.queueForVerification(anchor1, anchor2)
-			return *dist, "learned_uncertain", nil
-		}
-
-		// No learned pattern - compute with LLM and learn
-		a.logger.Debug("Progressive: Phase 2 - new pattern, using LLM",
-			"computation", currentTotal)
+	if shouldUseLLM {
 		dist, _, err := a.computeLLMDistance(ctx, anchor1, anchor2)
 		if err == nil {
-			a.recordObservation(anchor1, anchor2, dist)
-			return dist, "llm", nil
+			// Record observation with full weight
+			a.recordObservationWithMetadata(ctx, anchor1, anchor2, dist, source, vectorDist)
+			return dist, source, nil
 		}
 
-		// Fallback to vector
-		return a.computeVectorDistance(anchor1, anchor2)
+		// LLM failed - log warning
+		a.logger.Warn("LLM computation failed, using vector fallback",
+			"error", err,
+			"anchor1", anchor1.ID,
+			"anchor2", anchor2.ID)
 	}
 
-	// PHASE 3: Verification phase (400+ computations)
-	// Process queued uncertain cases with LLM
-	if currentTotal > 400 && len(a.uncertainQueue) > 0 {
-		// Check if current pair is in uncertain queue
-		if a.isInUncertainQueue(anchor1, anchor2) {
-			a.logger.Debug("Progressive: Phase 3 - verifying queued pair",
-				"computation", currentTotal,
-				"queue_size", len(a.uncertainQueue))
-			dist, _, err := a.computeLLMDistance(ctx, anchor1, anchor2)
-			if err == nil {
-				a.recordObservation(anchor1, anchor2, dist)
-				a.removeFromUncertainQueue(anchor1, anchor2)
-				return dist, "llm_verify", nil
-			}
-		}
-	}
+	// ===========================================
+	// FALLBACK: Vector Distance
+	// ===========================================
+	a.logger.Debug("Progressive: Using vector fallback",
+		"anchor1", anchor1.ID,
+		"anchor2", anchor2.ID,
+		"vector_dist", vectorDist)
 
-	// Default: use learned with fallback to vector
-	if dist := a.getLearnedDistance(anchor1, anchor2); dist != nil {
-		return *dist, "learned", nil
-	}
-
-	return a.computeVectorDistance(anchor1, anchor2)
+	return vectorDist, "vector_fallback", nil
 }
 
 // shouldSampleForLearning determines if a pair should be sampled for LLM learning
@@ -536,7 +906,7 @@ func (a *ComputationAgent) shouldSampleForLearning(anchor1, anchor2 *types.Seman
 	return true
 }
 
-// recordObservation adds an observation to the learned model
+// recordObservation adds an observation to the learned model (legacy method)
 func (a *ComputationAgent) recordObservation(anchor1, anchor2 *types.SemanticAnchor, distance float64) {
 	key := generatePatternKey(anchor1, anchor2)
 
@@ -561,6 +931,145 @@ func (a *ComputationAgent) recordObservation(anchor1, anchor2 *types.SemanticAnc
 		"distance", distance,
 		"observations", len(a.patternObservations[key]),
 		"avg", a.learnedDistances[key])
+}
+
+// recordObservationWithMetadata records an observation with full metadata and temporal decay support
+func (a *ComputationAgent) recordObservationWithMetadata(
+	ctx context.Context,
+	anchor1, anchor2 *types.SemanticAnchor,
+	distance float64,
+	source string,
+	vectorDistance float64,
+) {
+	if a.learnedPatternStorage == nil {
+		// Fallback to legacy method if storage not available
+		a.recordObservation(anchor1, anchor2, distance)
+		return
+	}
+
+	patternKey := generatePatternKey(anchor1, anchor2)
+	now := a.timeManager.Now()
+
+	// Extract context for the observation
+	season := getCurrentSeason(now)
+	dayType := getDayType(now)
+	timeOfDay := getContextValue(anchor1.Context, "time_of_day")
+
+	// Get observation weight based on source
+	weight := GetObservationWeight(source, a.learnedPatternConfig)
+
+	// Create observation
+	obs := Observation{
+		ID:             uuid.New(),
+		PatternKey:     patternKey,
+		Distance:       distance,
+		Source:         source,
+		Timestamp:      now,
+		Weight:         weight,
+		Season:         season,
+		DayType:        dayType,
+		TimeOfDay:      timeOfDay,
+		Anchor1ID:      &anchor1.ID,
+		Anchor2ID:      &anchor2.ID,
+		VectorDistance: &vectorDistance,
+	}
+
+	// Save observation to database
+	if err := a.learnedPatternStorage.SaveObservation(ctx, &obs); err != nil {
+		a.logger.Error("Failed to save observation",
+			"pattern_key", patternKey,
+			"error", err)
+		// Continue with cache update even if DB save fails
+	}
+
+	// Update cache
+	a.cacheMutex.Lock()
+	defer a.cacheMutex.Unlock()
+
+	// Add to observation cache
+	if _, exists := a.observationCache[patternKey]; !exists {
+		a.observationCache[patternKey] = make([]Observation, 0)
+	}
+	a.observationCache[patternKey] = append(a.observationCache[patternKey], obs)
+
+	// Prune old observations from cache
+	a.observationCache[patternKey] = PruneObservations(
+		a.observationCache[patternKey], now, a.learnedPatternConfig)
+
+	// Load or create pattern
+	pattern, exists := a.patternCache[patternKey]
+	if !exists {
+		// Extract pattern characteristics from key
+		loc1 := anchor1.Location
+		loc2 := anchor2.Location
+		timeOfDay1 := getContextValue(anchor1.Context, "time_of_day")
+		timeOfDay2 := getContextValue(anchor2.Context, "time_of_day")
+		dayType1 := getContextValue(anchor1.Context, "day_type")
+		dayType2 := getContextValue(anchor2.Context, "day_type")
+
+		pattern = &LearnedPattern{
+			PatternKey:         patternKey,
+			FirstSeen:          now,
+			LastUpdated:        now,
+			LastComputed:       now,
+			DecayHalfLifeHours: a.learnedPatternConfig.DecayHalfLifeDays * 24,
+			Location1:          loc1,
+			Location2:          loc2,
+			TimeOfDay1:         timeOfDay1,
+			TimeOfDay2:         timeOfDay2,
+			DayType1:           dayType1,
+			DayType2:           dayType2,
+			SampleAnchor1ID:    &anchor1.ID,
+			SampleAnchor2ID:    &anchor2.ID,
+		}
+	}
+
+	// Recompute pattern with all observations
+	observations := a.observationCache[patternKey]
+	weightedDistance, confidence := pattern.ComputeWeightedDistance(observations, now, a.learnedPatternConfig)
+
+	pattern.WeightedDistance = weightedDistance
+	pattern.ConfidenceScore = confidence
+	pattern.ObservationCount = len(observations)
+	pattern.LastUpdated = now
+	pattern.LastComputed = now
+
+	// Calculate statistics
+	if len(observations) > 0 {
+		minDist := observations[0].Distance
+		maxDist := observations[0].Distance
+		for _, o := range observations {
+			if o.Distance < minDist {
+				minDist = o.Distance
+			}
+			if o.Distance > maxDist {
+				maxDist = o.Distance
+			}
+		}
+		_, stdDev := computeStats(observations)
+		pattern.MinDistance = minDist
+		pattern.MaxDistance = maxDist
+		pattern.StdDeviation = stdDev
+	}
+
+	a.patternCache[patternKey] = pattern
+
+	// Async save pattern to database
+	go func() {
+		if err := a.learnedPatternStorage.SavePattern(context.Background(), pattern); err != nil {
+			a.logger.Error("Failed to save learned pattern",
+				"pattern_key", patternKey,
+				"error", err)
+		}
+	}()
+
+	a.logger.Debug("Recorded observation with metadata",
+		"pattern_key", patternKey,
+		"distance", distance,
+		"source", source,
+		"weight", weight,
+		"confidence", confidence,
+		"observations", len(observations))
 }
 
 // getLearnedDistanceWithConfidence returns learned distance and confidence score

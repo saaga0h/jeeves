@@ -74,14 +74,15 @@ type Config struct {
 	ConsolidationMaxGapMinutes int
 
 	// Pattern Discovery configuration
-	PatternDiscoveryEnabled       bool
-	PatternDistanceStrategy       string // "llm_first", "learned_first", "vector_first"
-	PatternDiscoveryIntervalHours int
-	PatternDiscoveryBatchSize     int
-	PatternClusteringEpsilon      float64
-	PatternClusteringMinPoints    int
-	PatternMinAnchorsForDiscovery int
-	PatternLookbackHours          int
+	PatternDiscoveryEnabled        bool
+	PatternDistanceStrategy        string // "llm_first", "learned_first", "vector_first"
+	PatternDiscoveryIntervalHours  int
+	PatternDiscoveryBatchSize      int
+	PatternClusteringEpsilon       float64
+	PatternClusteringMinPoints     int
+	PatternMinAnchorsForDiscovery  int
+	PatternLookbackHours           int
+	ProgressiveActivityEmbeddings  bool // Enable LLM-based activity embeddings with caching
 
 	// Temporal Grouping configuration
 	TemporalGroupingEnabled       bool
@@ -155,6 +156,7 @@ func NewConfig() *Config {
 		PatternClusteringMinPoints:    3,
 		PatternMinAnchorsForDiscovery: 10,
 		PatternLookbackHours:          168, // 7 days
+		ProgressiveActivityEmbeddings: false, // Disabled by default
 		// Temporal Grouping defaults
 		TemporalGroupingEnabled:       true,
 		TemporalGroupingWindowMinutes: 60,  // 60 minute window (better for longer activities)
@@ -399,6 +401,11 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("JEEVES_PATTERN_LOOKBACK_HOURS"); v != "" {
 		if hours, err := strconv.Atoi(v); err == nil {
 			c.PatternLookbackHours = hours
+		}
+	}
+	if v := os.Getenv("JEEVES_PROGRESSIVE_ACTIVITY_EMBEDDINGS"); v != "" {
+		if enabled, err := strconv.ParseBool(v); err == nil {
+			c.ProgressiveActivityEmbeddings = enabled
 		}
 	}
 

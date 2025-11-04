@@ -181,8 +181,8 @@ func (a *DiscoveryAgent) discoverPatternsInWindow(
 		"window_start", windowStart,
 		"window_end", windowEnd)
 
-	// Get anchors with computed distances within the time window
-	anchors, err := a.storage.GetAnchorsWithDistancesInWindow(ctx, windowStart, windowEnd)
+	// Get anchors within the time window (distances will be computed in-memory during clustering)
+	anchors, err := a.storage.GetAnchorsSinceInWindow(ctx, windowStart, windowEnd)
 	if err != nil {
 		return fmt.Errorf("failed to get anchors: %w", err)
 	}
@@ -224,6 +224,18 @@ func (a *DiscoveryAgent) discoverPatternsInWindow(
 				"is_parallel", isParallel)
 
 			if isParallel {
+				// TWO-PHASE CLUSTERING for parallel activities
+				// Phase 1: Same-location patterns (parallel activities)
+				// Phase 2: Cross-location patterns (transitions/routines)
+
+				withinLocationEpsilon := 0.15  // For same-location clusters (dist ~0.12)
+				crossLocationEpsilon := 0.27   // For cross-location transitions (dist ~0.25)
+
+				a.logger.Info("Using two-phase clustering for parallel activities",
+					"within_location_epsilon", withinLocationEpsilon,
+					"cross_location_epsilon", crossLocationEpsilon)
+
+				// PHASE 1: Cluster same-location anchors
 				for _, location := range locations {
 					locationAnchors := FilterByLocation(group, location)
 					if len(locationAnchors) < minAnchors {
@@ -235,13 +247,32 @@ func (a *DiscoveryAgent) discoverPatternsInWindow(
 						anchorIDs[j] = anchor.ID
 					}
 
-					clusters, err := a.clustering.ClusterAnchors(ctx, anchorIDs)
+					clusters, err := a.clustering.ClusterAnchorsWithEpsilon(ctx, anchorIDs, withinLocationEpsilon)
 					if err != nil {
-						a.logger.Error("Clustering failed", "error", err)
+						a.logger.Error("Same-location clustering failed", "error", err, "location", location)
 						continue
 					}
 
 					for _, cluster := range clusters {
+						if !cluster.Noise && len(cluster.Members) >= minAnchors {
+							validClusters = append(validClusters, cluster)
+						}
+					}
+				}
+
+				// PHASE 2: Cluster all anchors with higher epsilon to find cross-location patterns
+				// This captures transitions and sequences across locations
+				anchorIDs := make([]uuid.UUID, len(group.Anchors))
+				for j, anchor := range group.Anchors {
+					anchorIDs[j] = anchor.ID
+				}
+
+				crossClusters, err := a.clustering.ClusterAnchorsWithEpsilon(ctx, anchorIDs, crossLocationEpsilon)
+				if err != nil {
+					a.logger.Error("Cross-location clustering failed", "error", err)
+				} else {
+					// Use minAnchors for transitions (may be fewer than same-location patterns)
+					for _, cluster := range crossClusters {
 						if !cluster.Noise && len(cluster.Members) >= minAnchors {
 							validClusters = append(validClusters, cluster)
 						}
@@ -267,20 +298,57 @@ func (a *DiscoveryAgent) discoverPatternsInWindow(
 			}
 		}
 	} else {
-		// Single-stage clustering
+		// Two-phase clustering without temporal grouping
+		// Process all anchors together with adaptive epsilon
+		withinLocationEpsilon := 0.15  // For same-location clusters
+		crossLocationEpsilon := 0.27   // For cross-location transitions
+
+		a.logger.Info("Using two-phase clustering on all anchors",
+			"total_anchors", len(anchors),
+			"within_location_epsilon", withinLocationEpsilon,
+			"cross_location_epsilon", crossLocationEpsilon)
+
+		locations := GetUniqueLocations(TemporalGroup{Anchors: anchors})
+
+		// PHASE 1: Cluster same-location anchors
+		for _, location := range locations {
+			locationAnchors := FilterByLocation(TemporalGroup{Anchors: anchors}, location)
+			if len(locationAnchors) < minAnchors {
+				continue
+			}
+
+			anchorIDs := make([]uuid.UUID, len(locationAnchors))
+			for j, anchor := range locationAnchors {
+				anchorIDs[j] = anchor.ID
+			}
+
+			clusters, err := a.clustering.ClusterAnchorsWithEpsilon(ctx, anchorIDs, withinLocationEpsilon)
+			if err != nil {
+				a.logger.Error("Same-location clustering failed", "error", err, "location", location)
+				continue
+			}
+
+			for _, cluster := range clusters {
+				if !cluster.Noise && len(cluster.Members) >= minAnchors {
+					validClusters = append(validClusters, cluster)
+				}
+			}
+		}
+
+		// PHASE 2: Cluster all anchors with higher epsilon for cross-location patterns
 		anchorIDs := make([]uuid.UUID, len(anchors))
-		for i, anchor := range anchors {
-			anchorIDs[i] = anchor.ID
+		for j, anchor := range anchors {
+			anchorIDs[j] = anchor.ID
 		}
 
-		clusters, err := a.clustering.ClusterAnchors(ctx, anchorIDs)
+		crossClusters, err := a.clustering.ClusterAnchorsWithEpsilon(ctx, anchorIDs, crossLocationEpsilon)
 		if err != nil {
-			return fmt.Errorf("clustering failed: %w", err)
-		}
-
-		for _, cluster := range clusters {
-			if !cluster.Noise && len(cluster.Members) >= minAnchors {
-				validClusters = append(validClusters, cluster)
+			a.logger.Error("Cross-location clustering failed", "error", err)
+		} else {
+			for _, cluster := range crossClusters {
+				if !cluster.Noise && len(cluster.Members) >= minAnchors {
+					validClusters = append(validClusters, cluster)
+				}
 			}
 		}
 	}
@@ -337,8 +405,8 @@ func (a *DiscoveryAgent) discoverPatterns(ctx context.Context, minAnchors, lookb
 		"current_time", currentTime,
 		"since", since)
 
-	// Get recent anchors with computed distances
-	anchors, err := a.storage.GetAnchorsWithDistances(ctx, since)
+	// Get recent anchors (distances will be computed in-memory during clustering)
+	anchors, err := a.storage.GetAnchorsSince(ctx, since)
 	if err != nil {
 		return fmt.Errorf("failed to get anchors: %w", err)
 	}

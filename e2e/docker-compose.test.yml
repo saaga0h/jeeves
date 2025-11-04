@@ -157,19 +157,27 @@ services:
       JEEVES_LLM_MODEL: mixtral:8x7b
       # Pattern Discovery Configuration
       JEEVES_PATTERN_DISCOVERY_ENABLED: "true"
-      JEEVES_PATTERN_DISTANCE_STRATEGY: "llm_first"
+      JEEVES_PATTERN_DISTANCE_STRATEGY: "progressive_learned"
       JEEVES_PATTERN_DISCOVERY_INTERVAL_HOURS: 6
       JEEVES_PATTERN_DISCOVERY_BATCH_SIZE: 1000
       # Batch Processing Configuration
+      # Use VERY large window (7 days) to ensure all test anchors in one batch
       JEEVES_BATCH_PROCESSING_ENABLED: "true"
-      JEEVES_BATCH_DURATION: "2h"
-      JEEVES_BATCH_OVERLAP: "30m"
+      JEEVES_BATCH_DURATION: "168h"  # 7 days - covers entire test
+      JEEVES_BATCH_OVERLAP: "1h"
       JEEVES_BATCH_SCHEDULE_ENABLED: "false"  # Manual trigger via MQTT
       JEEVES_BATCH_METADATA_ENABLED: "true"
       JEEVES_PATTERN_CLUSTERING_EPSILON: 0.3
       JEEVES_PATTERN_CLUSTERING_MIN_POINTS: 2
       JEEVES_PATTERN_MIN_ANCHORS_FOR_DISCOVERY: 3
       JEEVES_PATTERN_LOOKBACK_HOURS: 168
+      # Temporal Grouping (Multi-stage Clustering)
+      # Disabled - with progressive learning, in-memory distance computation is fast enough
+      JEEVES_TEMPORAL_GROUPING_ENABLED: "false"
+      JEEVES_TEMPORAL_GROUPING_WINDOW_MINUTES: 60
+      JEEVES_TEMPORAL_GROUPING_OVERLAP_RATIO: 0.5
+      # Progressive Activity Embeddings (LLM-based with caching)
+      JEEVES_PROGRESSIVE_ACTIVITY_EMBEDDINGS: "true"  # Enable for testing parallel activities
 
     extra_hosts:
       - "host.docker.internal:host-gateway"

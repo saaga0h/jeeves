@@ -127,6 +127,14 @@ func (a *Agent) initializePatternDiscovery() error {
 		a.timeManager,
 	)
 
+	// Set learned pattern storage with DB access
+	if dbGetter, ok := a.pgClient.(interface{ DB() *sql.DB }); ok {
+		a.distanceAgent.SetLearnedPatternStorage(dbGetter.DB())
+		a.logger.Info("Learned pattern storage initialized with temporal decay support")
+	} else {
+		a.logger.Warn("Could not initialize learned pattern storage: DB access not available")
+	}
+
 	// Initialize clustering engine
 	clusteringConfig := clustering.DBSCANConfig{
 		Epsilon:   a.cfg.PatternClusteringEpsilon,

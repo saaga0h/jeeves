@@ -1,0 +1,555 @@
+name: "Progressive Learning - Morning Routine Validation"
+description: "Test progressive learning strategy with temporal decay. Measures LLM call reduction and learned pattern usage over repeated routines."
+
+test_mode:
+  virtual_start: "2025-10-30T06:00:00Z"
+  time_scale: 10  # 10x time scale for faster testing
+
+setup:
+  location: "universe"
+  initial_state:
+    pattern_discovery_enabled: true
+    pattern_distance_strategy: "progressive_learned"  # NEW STRATEGY!
+    pattern_distance_batch_size: 100
+    batch_processing_enabled: false  # DISABLED - process all anchors in single discovery run
+    batch_duration: "168h"
+    batch_overlap: "1h"
+
+events:
+  # ===============================================
+  # ROUTINE 1: Initial Morning (06:00-06:40)
+  # Expected: Mostly LLM seeding
+  # ===============================================
+
+  # === Wake up sequence (06:00-06:05) ===
+  - time: 0
+    sensor: "motion:bedroom"
+    value: true
+    description: "Routine 1: Wake up"
+
+  - time: 60
+    sensor: "motion:bedroom"
+    value: true
+    description: "Routine 1: Get out of bed"
+
+  - time: 180
+    type: lighting
+    location: bedroom
+    description: "Routine 1: Turn on bedroom light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T06:03:00Z"
+
+  # === Bathroom sequence (06:05-06:15) ===
+  - time: 300
+    sensor: "motion:bathroom"
+    value: true
+    description: "Routine 1: Enter bathroom"
+
+  - time: 330
+    type: lighting
+    location: bathroom
+    description: "Routine 1: Turn on bathroom light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T06:05:30Z"
+
+  - time: 600
+    sensor: "motion:bathroom"
+    value: true
+    description: "Routine 1: Use bathroom"
+
+  - time: 840
+    type: lighting
+    location: bathroom
+    description: "Routine 1: Turn off bathroom light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T06:14:00Z"
+
+  # === Kitchen sequence (06:15-06:25) ===
+  - time: 900
+    sensor: "motion:kitchen"
+    value: true
+    description: "Routine 1: Enter kitchen"
+
+  - time: 930
+    type: lighting
+    location: kitchen
+    description: "Routine 1: Turn on kitchen light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T06:15:30Z"
+
+  - time: 1080
+    sensor: "motion:kitchen"
+    value: true
+    description: "Routine 1: Prepare breakfast"
+
+  - time: 1380
+    sensor: "motion:kitchen"
+    value: true
+    description: "Routine 1: Finish breakfast prep"
+
+  # === Dining sequence (06:25-06:35) ===
+  - time: 1500
+    type: lighting
+    location: dining_room
+    description: "Routine 1: Turn on dining light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T06:25:00Z"
+
+  - time: 1560
+    sensor: "motion:dining_room"
+    value: true
+    description: "Routine 1: Start eating"
+
+  - time: 1920
+    sensor: "motion:dining_room"
+    value: true
+    description: "Routine 1: Finish eating"
+
+  - time: 2040
+    type: lighting
+    location: dining_room
+    description: "Routine 1: Turn off dining light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T06:34:00Z"
+
+  # === Cleanup sequence (06:35-06:40) ===
+  - time: 2100
+    sensor: "motion:kitchen"
+    value: true
+    description: "Routine 1: Clean up kitchen"
+
+  - time: 2340
+    type: lighting
+    location: kitchen
+    description: "Routine 1: Turn off kitchen light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T06:39:00Z"
+
+  # === BATCH 1: Process Routine 1 (06:40) ===
+  - time: 2400
+    type: behavior
+    location: universe
+    description: "Batch 1: Consolidate Routine 1"
+    data:
+      action: "consolidate"
+      lookback_hours: 2
+
+  - time: 2430
+    type: behavior
+    location: universe
+    description: "Batch 1: Process Routine 1 (LLM seeding phase)"
+    data:
+      action: "process_batch"
+      batch_end: "2025-10-30T06:40:00Z"
+      batch_duration_hours: 0.667  # 40 minutes
+      overlap_minutes: 0
+
+  # ===============================================
+  # ROUTINE 2: Second Morning (06:45-07:25)
+  # Expected: Mix of LLM and learned patterns start appearing
+  # ===============================================
+
+  # === Wake up sequence (06:45-06:50) ===
+  - time: 2700
+    sensor: "motion:bedroom"
+    value: true
+    description: "Routine 2: Wake up"
+
+  - time: 2760
+    sensor: "motion:bedroom"
+    value: true
+    description: "Routine 2: Get out of bed"
+
+  - time: 2880
+    type: lighting
+    location: bedroom
+    description: "Routine 2: Turn on bedroom light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T06:48:00Z"
+
+  # === Bathroom sequence (06:50-07:00) ===
+  - time: 3000
+    sensor: "motion:bathroom"
+    value: true
+    description: "Routine 2: Enter bathroom"
+
+  - time: 3030
+    type: lighting
+    location: bathroom
+    description: "Routine 2: Turn on bathroom light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T06:50:30Z"
+
+  - time: 3300
+    sensor: "motion:bathroom"
+    value: true
+    description: "Routine 2: Use bathroom"
+
+  - time: 3540
+    type: lighting
+    location: bathroom
+    description: "Routine 2: Turn off bathroom light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T06:59:00Z"
+
+  # === Kitchen sequence (07:00-07:10) ===
+  - time: 3600
+    sensor: "motion:kitchen"
+    value: true
+    description: "Routine 2: Enter kitchen"
+
+  - time: 3630
+    type: lighting
+    location: kitchen
+    description: "Routine 2: Turn on kitchen light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T07:00:30Z"
+
+  - time: 3780
+    sensor: "motion:kitchen"
+    value: true
+    description: "Routine 2: Prepare breakfast"
+
+  - time: 4080
+    sensor: "motion:kitchen"
+    value: true
+    description: "Routine 2: Finish breakfast prep"
+
+  # === Dining sequence (07:10-07:20) ===
+  - time: 4200
+    type: lighting
+    location: dining_room
+    description: "Routine 2: Turn on dining light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T07:10:00Z"
+
+  - time: 4260
+    sensor: "motion:dining_room"
+    value: true
+    description: "Routine 2: Start eating"
+
+  - time: 4620
+    sensor: "motion:dining_room"
+    value: true
+    description: "Routine 2: Finish eating"
+
+  - time: 4740
+    type: lighting
+    location: dining_room
+    description: "Routine 2: Turn off dining light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T07:19:00Z"
+
+  # === Cleanup sequence (07:20-07:25) ===
+  - time: 4800
+    sensor: "motion:kitchen"
+    value: true
+    description: "Routine 2: Clean up kitchen"
+
+  - time: 5040
+    type: lighting
+    location: kitchen
+    description: "Routine 2: Turn off kitchen light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T07:24:00Z"
+
+  # === BATCH 2: Process Routine 2 (07:25) ===
+  - time: 5100
+    type: behavior
+    location: universe
+    description: "Batch 2: Consolidate Routine 2"
+    data:
+      action: "consolidate"
+      lookback_hours: 2
+
+  - time: 5130
+    type: behavior
+    location: universe
+    description: "Batch 2: Process Routine 2 (learned patterns emerging)"
+    data:
+      action: "process_batch"
+      batch_end: "2025-10-30T07:25:00Z"
+      batch_duration_hours: 0.667  # 40 minutes
+      overlap_minutes: 5
+
+  # ===============================================
+  # ROUTINE 3: Third Morning (07:30-08:10)
+  # Expected: Significant use of learned patterns and similarity caching
+  # ===============================================
+
+  # === Wake up sequence (07:30-07:35) ===
+  - time: 5400
+    sensor: "motion:bedroom"
+    value: true
+    description: "Routine 3: Wake up"
+
+  - time: 5460
+    sensor: "motion:bedroom"
+    value: true
+    description: "Routine 3: Get out of bed"
+
+  - time: 5580
+    type: lighting
+    location: bedroom
+    description: "Routine 3: Turn on bedroom light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T07:33:00Z"
+
+  # === Bathroom sequence (07:35-07:45) ===
+  - time: 5700
+    sensor: "motion:bathroom"
+    value: true
+    description: "Routine 3: Enter bathroom"
+
+  - time: 5730
+    type: lighting
+    location: bathroom
+    description: "Routine 3: Turn on bathroom light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T07:35:30Z"
+
+  - time: 6000
+    sensor: "motion:bathroom"
+    value: true
+    description: "Routine 3: Use bathroom"
+
+  - time: 6240
+    type: lighting
+    location: bathroom
+    description: "Routine 3: Turn off bathroom light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T07:44:00Z"
+
+  # === Kitchen sequence (07:45-07:55) ===
+  - time: 6300
+    sensor: "motion:kitchen"
+    value: true
+    description: "Routine 3: Enter kitchen"
+
+  - time: 6330
+    type: lighting
+    location: kitchen
+    description: "Routine 3: Turn on kitchen light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T07:45:30Z"
+
+  - time: 6480
+    sensor: "motion:kitchen"
+    value: true
+    description: "Routine 3: Prepare breakfast"
+
+  - time: 6780
+    sensor: "motion:kitchen"
+    value: true
+    description: "Routine 3: Finish breakfast prep"
+
+  # === Dining sequence (07:55-08:05) ===
+  - time: 6900
+    type: lighting
+    location: dining_room
+    description: "Routine 3: Turn on dining light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T07:55:00Z"
+
+  - time: 6960
+    sensor: "motion:dining_room"
+    value: true
+    description: "Routine 3: Start eating"
+
+  - time: 7320
+    sensor: "motion:dining_room"
+    value: true
+    description: "Routine 3: Finish eating"
+
+  - time: 7440
+    type: lighting
+    location: dining_room
+    description: "Routine 3: Turn off dining light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T08:04:00Z"
+
+  # === Cleanup sequence (08:05-08:10) ===
+  - time: 7500
+    sensor: "motion:kitchen"
+    value: true
+    description: "Routine 3: Clean up kitchen"
+
+  - time: 7740
+    type: lighting
+    location: kitchen
+    description: "Routine 3: Turn off kitchen light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T08:09:00Z"
+
+  # === BATCH 3: Process Routine 3 (08:10) ===
+  - time: 7800
+    type: behavior
+    location: universe
+    description: "Batch 3: Consolidate Routine 3"
+    data:
+      action: "consolidate"
+      lookback_hours: 2
+
+  - time: 7830
+    type: behavior
+    location: universe
+    description: "Batch 3: Process Routine 3 (high learned pattern usage)"
+    data:
+      action: "process_batch"
+      batch_end: "2025-10-30T08:10:00Z"
+      batch_duration_hours: 0.667  # 40 minutes
+      overlap_minutes: 5
+
+  # === Manual Pattern Discovery Trigger (since batch processing disabled) ===
+  - time: 8100
+    type: behavior
+    location: universe
+    description: "Trigger pattern discovery on all anchors"
+    data:
+      action: "discover_patterns"
+      min_anchors: 3
+      lookback_hours: 168
+
+wait:
+  - time: 8400
+    description: "Wait for pattern discovery to complete (t=14min real)"
+
+expectations:
+  postgres:
+    # After Batch 1: Initial seeding, mostly LLM
+    - time: 3000
+      postgres_query: |
+        SELECT COUNT(*) FILTER (WHERE source IN ('llm', 'llm_seed'))
+        FROM anchor_distances
+      postgres_expected: ">=20"
+      description: "Batch 1: Expect LLM seeding"
+
+    - time: 3000
+      postgres_query: |
+        SELECT COUNT(*) FROM learned_patterns
+      postgres_expected: ">=5"
+      description: "Batch 1: Learned patterns starting to form"
+
+    # After Batch 2: Learned patterns emerging
+    - time: 5700
+      postgres_query: |
+        SELECT COUNT(*) FILTER (WHERE source IN ('learned_high_conf', 'learned_medium_conf'))
+        FROM anchor_distances
+      postgres_expected: ">=10"
+      description: "Batch 2: Learned patterns being used"
+
+    - time: 5700
+      postgres_query: |
+        SELECT COUNT(*) FROM pattern_observations
+      postgres_expected: ">=30"
+      description: "Batch 2: Observations accumulating"
+
+    # After Batch 3: Significant learned pattern usage
+    - time: 8100
+      postgres_query: |
+        SELECT COUNT(*) FILTER (WHERE source IN ('learned_high_conf', 'learned_medium_conf', 'similarity_cached'))
+        FROM anchor_distances
+      postgres_expected: ">=30"
+      description: "Batch 3: High learned pattern usage"
+
+    - time: 8100
+      postgres_query: |
+        SELECT COUNT(*) FILTER (WHERE source = 'similarity_cached')
+        FROM anchor_distances
+      postgres_expected: ">=5"
+      description: "Batch 3: Similarity caching working"
+
+    # Final validation: LLM call reduction
+    - time: 8100
+      postgres_query: |
+        SELECT
+          ROUND(
+            COUNT(*) FILTER (WHERE source IN ('llm', 'llm_seed')) * 100.0 /
+            NULLIF(COUNT(*), 0)
+          ) as llm_percentage
+        FROM anchor_distances
+      postgres_expected: "<50"
+      description: "Final: LLM calls should be <50% of total"
+
+    # Pattern quality check
+    - time: 8100
+      postgres_query: "SELECT COUNT(*) FROM behavioral_patterns"
+      postgres_expected: ">=5"
+      description: "Final: Multiple patterns discovered"
+
+    # Confidence scores check
+    - time: 8100
+      postgres_query: |
+        SELECT COUNT(*) FILTER (WHERE confidence_score >= 0.7)
+        FROM learned_patterns
+      postgres_expected: ">=3"
+      description: "Final: High confidence patterns established"
+
+    # Source distribution analysis
+    - time: 8100
+      postgres_query: |
+        SELECT COUNT(DISTINCT source) FROM anchor_distances
+      postgres_expected: ">=4"
+      description: "Final: Multiple distance sources used (diversity)"
+
+    # Temporal decay validation
+    - time: 8100
+      postgres_query: |
+        SELECT COUNT(*) FROM pattern_observations
+        WHERE timestamp >= NOW() - INTERVAL '2 hours'
+      postgres_expected: ">=20"
+      description: "Final: Recent observations recorded"

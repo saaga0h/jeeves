@@ -11,9 +11,11 @@ import (
 
 	"github.com/saaga0h/jeeves-platform/internal/behavior/anchor"
 	behaviorcontext "github.com/saaga0h/jeeves-platform/internal/behavior/context"
+	"github.com/saaga0h/jeeves-platform/internal/behavior/embedding"
 	"github.com/saaga0h/jeeves-platform/internal/behavior/storage"
 	"github.com/saaga0h/jeeves-platform/internal/behavior/types"
 	"github.com/saaga0h/jeeves-platform/pkg/config"
+	"github.com/saaga0h/jeeves-platform/pkg/llm"
 )
 
 // initializeAnchorCreator sets up the semantic anchor creation system.
@@ -25,6 +27,22 @@ func (a *Agent) initializeAnchorCreator(cfg *config.Config) error {
 	db, err := a.getDBConnection()
 	if err != nil {
 		return fmt.Errorf("failed to get database connection: %w", err)
+	}
+
+	// Initialize location embedding system (dynamic LLM-based classification)
+	llmClient := llm.NewOllamaClient(cfg.LLMEndpoint, a.logger)
+	locationClassifier := embedding.NewLocationClassifier(llmClient, cfg.LLMModel, a.logger)
+	locationStorage := embedding.NewLocationEmbeddingStorage(db, locationClassifier, a.logger)
+
+	// Set global location embedding storage for use by semantic_embedding.go
+	embedding.SetLocationEmbeddingStorage(locationStorage)
+
+	// Preload location embeddings cache from database
+	if err := locationStorage.PreloadCache(context.Background()); err != nil {
+		a.logger.Warn("Failed to preload location embeddings cache", "error", err)
+		// Continue anyway - embeddings will be loaded on-demand
+	} else {
+		a.logger.Info("Location embeddings cache preloaded", "count", locationStorage.GetCacheSize())
 	}
 
 	// Create storage layer
@@ -39,7 +57,24 @@ func (a *Agent) initializeAnchorCreator(cfg *config.Config) error {
 	// Create anchor creator
 	a.anchorCreator = anchor.NewAnchorCreator(anchorStorage, contextGatherer, a.logger)
 
-	a.logger.Info("Semantic anchor system initialized")
+	// Initialize progressive activity embeddings (optional feature)
+	if cfg.ProgressiveActivityEmbeddings {
+		llmClient := llm.NewOllamaClient(cfg.LLMEndpoint, a.logger)
+		activityStorage := embedding.NewActivityEmbeddingStorage(db)
+		activityLLM := embedding.NewActivityLLMEmbeddingGenerator(
+			llmClient,
+			cfg.LLMModel, // Reuse the same model as distance computation
+			a.logger,
+		)
+		activityAgent := &embedding.ActivityEmbeddingAgent{
+			Storage: activityStorage,
+			LLM:     activityLLM,
+		}
+		a.anchorCreator.SetActivityEmbeddingAgent(activityAgent)
+		a.logger.Info("Progressive activity embeddings enabled")
+	}
+
+	a.logger.Info("Semantic anchor system initialized with dynamic location embeddings")
 	return nil
 }
 
@@ -87,6 +122,7 @@ func (a *Agent) buildSignalValue(event Event) map[string]interface{} {
 		"type": event.Type,
 	}
 
+	// Add basic event fields
 	switch event.Type {
 	case "motion":
 		value["state"] = event.State
@@ -94,6 +130,8 @@ func (a *Agent) buildSignalValue(event Event) map[string]interface{} {
 		value["state"] = event.State
 		value["source"] = event.Source
 	case "presence":
+		value["state"] = event.State
+	case "media":
 		value["state"] = event.State
 	}
 

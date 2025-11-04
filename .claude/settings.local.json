@@ -17,7 +17,14 @@
       "Bash(docker-compose build:*)",
       "Bash(docker-compose up:*)",
       "Bash(docker-compose:*)",
-      "Bash(docker ps:*)"
+      "Bash(docker ps:*)",
+      "Bash(/usr/local/go/bin/go version:*)",
+      "Bash(export PATH=\"/opt/homebrew/bin:$PATH\")",
+      "Bash(./run-test.sh:*)",
+      "Bash(/usr/local/bin/docker exec:*)",
+      "Bash(/usr/local/bin/docker logs jeeves-test-behavior)",
+      "Bash(/usr/local/bin/docker logs jeeves-test-behavior 2)",
+      "Bash(1)"
     ],
     "deny": [],
     "ask": []

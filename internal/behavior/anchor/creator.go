@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pgvector/pgvector-go"
 
 	behaviorcontext "github.com/saaga0h/jeeves-platform/internal/behavior/context"
 	"github.com/saaga0h/jeeves-platform/internal/behavior/embedding"
@@ -24,6 +25,9 @@ type AnchorCreator struct {
 	// Track last anchor per location for linking
 	lastAnchors    map[string]uuid.UUID
 	lastAnchorsMux sync.RWMutex
+
+	// Optional: Progressive activity embedding agent (nil = use rule-based)
+	activityEmbeddingAgent *embedding.ActivityEmbeddingAgent
 }
 
 // NewAnchorCreator creates a new anchor creator instance.
@@ -38,6 +42,12 @@ func NewAnchorCreator(
 		logger:          logger,
 		lastAnchors:     make(map[string]uuid.UUID),
 	}
+}
+
+// SetActivityEmbeddingAgent sets the progressive activity embedding agent (optional)
+func (c *AnchorCreator) SetActivityEmbeddingAgent(agent *embedding.ActivityEmbeddingAgent) {
+	c.activityEmbeddingAgent = agent
+	c.logger.Info("Progressive activity embeddings enabled")
 }
 
 // CreateAnchor creates a semantic anchor from observed activity signals.
@@ -56,14 +66,30 @@ func (c *AnchorCreator) CreateAnchor(
 	}
 
 	// Compute semantic embedding (128-dimensional vector)
-	embeddingVec, err := embedding.ComputeSemanticEmbedding(
-		location,
-		timestamp,
-		semanticContext,
-		signals,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compute embedding: %w", err)
+	var embeddingVec pgvector.Vector
+	if c.activityEmbeddingAgent != nil {
+		// Use progressive activity embeddings (LLM-based with caching)
+		embeddingVec, err = c.activityEmbeddingAgent.ComputeSemanticEmbeddingProgressive(
+			ctx,
+			location,
+			timestamp,
+			semanticContext,
+			signals,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compute progressive embedding: %w", err)
+		}
+	} else {
+		// Fallback to rule-based embeddings
+		embeddingVec, err = embedding.ComputeSemanticEmbedding(
+			location,
+			timestamp,
+			semanticContext,
+			signals,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compute embedding: %w", err)
+		}
 	}
 
 	// Create anchor structure

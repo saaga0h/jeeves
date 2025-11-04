@@ -793,6 +793,131 @@ func (s *AnchorStorage) UpdateAnchorPattern(ctx context.Context, anchorID, patte
 }
 
 // GetAnchorsWithDistances retrieves anchors that have computed distances
+// GetAnchorsSince retrieves all anchors since a given timestamp
+// This method does NOT require pre-computed distances, making it suitable for in-memory distance computation
+func (s *AnchorStorage) GetAnchorsSince(ctx context.Context, since time.Time) ([]*types.SemanticAnchor, error) {
+	query := `
+		SELECT id, timestamp, location, semantic_embedding,
+		       context, signals, duration_minutes, duration_source,
+		       duration_confidence, preceding_anchor_id, following_anchor_id,
+		       pattern_id, created_at
+		FROM semantic_anchors
+		WHERE timestamp >= $1
+		  AND pattern_id IS NULL
+		ORDER BY timestamp ASC`
+
+	rows, err := s.db.QueryContext(ctx, query, since)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query anchors: %w", err)
+	}
+	defer rows.Close()
+
+	var anchors []*types.SemanticAnchor
+	for rows.Next() {
+		var anchor types.SemanticAnchor
+		var contextJSON, signalsJSON []byte
+
+		err := rows.Scan(
+			&anchor.ID,
+			&anchor.Timestamp,
+			&anchor.Location,
+			&anchor.SemanticEmbedding,
+			&contextJSON,
+			&signalsJSON,
+			&anchor.DurationMinutes,
+			&anchor.DurationSource,
+			&anchor.DurationConfidence,
+			&anchor.PrecedingAnchorID,
+			&anchor.FollowingAnchorID,
+			&anchor.PatternID,
+			&anchor.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan anchor: %w", err)
+		}
+
+		// Unmarshal JSONB fields
+		if err := json.Unmarshal(contextJSON, &anchor.Context); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal context: %w", err)
+		}
+
+		if err := json.Unmarshal(signalsJSON, &anchor.Signals); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal signals: %w", err)
+		}
+
+		anchors = append(anchors, &anchor)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating anchors: %w", err)
+	}
+
+	return anchors, nil
+}
+
+// GetAnchorsSinceInWindow retrieves all anchors within a time window
+// This method does NOT require pre-computed distances, making it suitable for in-memory distance computation
+func (s *AnchorStorage) GetAnchorsSinceInWindow(ctx context.Context, windowStart, windowEnd time.Time) ([]*types.SemanticAnchor, error) {
+	query := `
+		SELECT id, timestamp, location, semantic_embedding,
+		       context, signals, duration_minutes, duration_source,
+		       duration_confidence, preceding_anchor_id, following_anchor_id,
+		       pattern_id, created_at
+		FROM semantic_anchors
+		WHERE timestamp >= $1
+		  AND timestamp < $2
+		  AND pattern_id IS NULL
+		ORDER BY timestamp ASC`
+
+	rows, err := s.db.QueryContext(ctx, query, windowStart, windowEnd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query anchors: %w", err)
+	}
+	defer rows.Close()
+
+	var anchors []*types.SemanticAnchor
+	for rows.Next() {
+		var anchor types.SemanticAnchor
+		var contextJSON, signalsJSON []byte
+
+		err := rows.Scan(
+			&anchor.ID,
+			&anchor.Timestamp,
+			&anchor.Location,
+			&anchor.SemanticEmbedding,
+			&contextJSON,
+			&signalsJSON,
+			&anchor.DurationMinutes,
+			&anchor.DurationSource,
+			&anchor.DurationConfidence,
+			&anchor.PrecedingAnchorID,
+			&anchor.FollowingAnchorID,
+			&anchor.PatternID,
+			&anchor.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan anchor: %w", err)
+		}
+
+		// Unmarshal JSONB fields
+		if err := json.Unmarshal(contextJSON, &anchor.Context); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal context: %w", err)
+		}
+
+		if err := json.Unmarshal(signalsJSON, &anchor.Signals); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal signals: %w", err)
+		}
+
+		anchors = append(anchors, &anchor)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating anchors: %w", err)
+	}
+
+	return anchors, nil
+}
+
 func (s *AnchorStorage) GetAnchorsWithDistances(ctx context.Context, since time.Time) ([]*types.SemanticAnchor, error) {
 	return s.GetAnchorsWithDistancesInWindow(ctx, since, time.Time{})
 }
