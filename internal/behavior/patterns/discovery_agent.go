@@ -11,6 +11,7 @@ import (
 
 	"github.com/saaga0h/jeeves-platform/internal/behavior/clustering"
 	"github.com/saaga0h/jeeves-platform/internal/behavior/storage"
+	"github.com/saaga0h/jeeves-platform/internal/behavior/types"
 	"github.com/saaga0h/jeeves-platform/pkg/mqtt"
 )
 
@@ -22,12 +23,13 @@ type TimeManager interface {
 
 // DiscoveryConfig configures pattern discovery behavior
 type DiscoveryConfig struct {
-	Interval                    time.Duration // production: 24h, tests: triggered
-	MinAnchors                  int           // minimum anchors needed (default: 10)
-	LookbackHours               int           // how far back to analyze
-	TemporalGroupingEnabled     bool          // enable multi-stage clustering
-	TemporalGroupingWindow      time.Duration // window size for grouping
-	TemporalGroupingOverlapRatio float64       // overlap threshold for parallelism
+	Interval                      time.Duration // production: 24h, tests: triggered
+	MinAnchors                    int           // minimum anchors needed (default: 10)
+	LookbackHours                 int           // how far back to analyze
+	TemporalGroupingEnabled       bool          // enable multi-stage clustering
+	TemporalGroupingWindow        time.Duration // window size for grouping
+	TemporalGroupingOverlapRatio  float64       // overlap threshold for parallelism
+	UseLocationTemporalClustering bool          // NEW: use location-aware temporal clustering
 }
 
 // DiscoveryAgent orchestrates clustering and pattern interpretation
@@ -421,6 +423,11 @@ func (a *DiscoveryAgent) discoverPatterns(ctx context.Context, minAnchors, lookb
 
 	a.logger.Info("Clustering anchors", "count", len(anchors))
 
+	// NEW: Location-temporal clustering path
+	if a.config.UseLocationTemporalClustering {
+		return a.discoverPatternsWithLocationTemporal(ctx, anchors, minAnchors, startTime)
+	}
+
 	// Multi-stage clustering: check if temporal grouping is enabled
 	var validClusters []*clustering.Cluster
 
@@ -625,4 +632,137 @@ func (a *DiscoveryAgent) publishCompletion(patternsCreated int) {
 		a.logger.Info("Published pattern discovery completion",
 			"patterns_created", patternsCreated)
 	}
+}
+
+// discoverPatternsWithLocationTemporal uses location-aware temporal clustering
+func (a *DiscoveryAgent) discoverPatternsWithLocationTemporal(
+	ctx context.Context,
+	anchors []*types.SemanticAnchor,
+	minAnchors int,
+	startTime time.Time,
+) error {
+	a.logger.Info("Using location-temporal clustering",
+		"anchor_count", len(anchors),
+		"min_anchors", minAnchors)
+
+	// STEP 1: Location-temporal clustering
+	clusterer := NewLocationTemporalClusterer()
+	sequences := clusterer.ClusterByLocationTemporal(anchors)
+
+	a.logger.Info("Location-temporal clustering complete",
+		"sequences_found", len(sequences))
+
+	// STEP 2: Semantic validation
+	validator := NewSemanticValidator(a.logger)
+	var validSequences []*ActivitySequence
+
+	for _, seq := range sequences {
+		valid, avgDist := validator.ValidateSequence(seq)
+
+		if valid {
+			validSequences = append(validSequences, seq)
+			a.logger.Info("Sequence validated",
+				"sequence_id", seq.ID,
+				"anchor_count", len(seq.Anchors),
+				"locations", seq.Locations,
+				"cross_location", seq.IsCrossLocation,
+				"avg_distance", avgDist)
+		} else {
+			// Try to split incoherent sequence
+			a.logger.Info("Sequence validation failed, attempting split",
+				"sequence_id", seq.ID,
+				"avg_distance", avgDist)
+
+			split := validator.SplitIncoherentSequence(seq)
+			for _, subSeq := range split {
+				subValid, subAvgDist := validator.ValidateSequence(subSeq)
+				if subValid {
+					validSequences = append(validSequences, subSeq)
+					a.logger.Info("Sub-sequence validated after split",
+						"sequence_id", subSeq.ID,
+						"anchor_count", len(subSeq.Anchors),
+						"avg_distance", subAvgDist)
+				}
+			}
+		}
+	}
+
+	a.logger.Info("Semantic validation complete",
+		"valid_sequences", len(validSequences))
+
+	if len(validSequences) == 0 {
+		a.logger.Info("No valid sequences found")
+		a.publishCompletion(0)
+		return nil
+	}
+
+	// STEP 3: Convert sequences to patterns
+	patternsCreated := 0
+
+	for _, seq := range validSequences {
+		// Filter sequences that are too small
+		if len(seq.Anchors) < minAnchors {
+			a.logger.Debug("Skipping small sequence",
+				"sequence_id", seq.ID,
+				"anchor_count", len(seq.Anchors),
+				"required", minAnchors)
+			continue
+		}
+
+		// Extract anchor IDs for pattern interpretation
+		anchorIDs := make([]uuid.UUID, len(seq.Anchors))
+		for i, anchor := range seq.Anchors {
+			anchorIDs[i] = anchor.ID
+		}
+
+		// Interpret sequence as a pattern
+		pattern, err := a.interpreter.InterpretCluster(ctx, anchorIDs)
+		if err != nil {
+			a.logger.Error("Failed to interpret sequence",
+				"sequence_id", seq.ID,
+				"error", err)
+			continue
+		}
+
+		// Store pattern
+		if err := a.storage.CreatePattern(ctx, pattern); err != nil {
+			a.logger.Error("Failed to store pattern",
+				"pattern_id", pattern.ID,
+				"error", err)
+			continue
+		}
+
+		// Update anchors to reference this pattern
+		for _, anchorID := range anchorIDs {
+			if err := a.storage.UpdateAnchorPattern(ctx, anchorID, pattern.ID); err != nil {
+				a.logger.Warn("Failed to update anchor pattern",
+					"anchor_id", anchorID,
+					"pattern_id", pattern.ID,
+					"error", err)
+			}
+		}
+
+		patternsCreated++
+
+		a.logger.Info("Pattern created from sequence",
+			"pattern_id", pattern.ID,
+			"sequence_id", seq.ID,
+			"anchor_count", len(anchorIDs),
+			"locations", seq.Locations,
+			"cross_location", seq.IsCrossLocation)
+	}
+
+	duration := time.Since(startTime)
+
+	a.logger.Info("Location-temporal pattern discovery completed",
+		"anchors_analyzed", len(anchors),
+		"sequences_found", len(sequences),
+		"valid_sequences", len(validSequences),
+		"patterns_created", patternsCreated,
+		"duration", duration)
+
+	// Publish completion event
+	a.publishCompletion(patternsCreated)
+
+	return nil
 }

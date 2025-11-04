@@ -89,6 +89,9 @@ type Config struct {
 	TemporalGroupingWindowMinutes int     // Window size in minutes for temporal grouping
 	TemporalGroupingOverlapRatio  float64 // Overlap threshold (0.0-1.0) for parallelism detection
 
+	// Location-Temporal Clustering (NEW)
+	UseLocationTemporalClustering bool // Use location-aware temporal density clustering instead of DBSCAN
+
 	// Batch Processing configuration (sliding window)
 	BatchProcessingEnabled  bool          // Enable sliding window batch processing
 	BatchDuration           time.Duration // Duration of each batch window (e.g., 2 hours)
@@ -423,6 +426,13 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("JEEVES_TEMPORAL_GROUPING_OVERLAP_RATIO"); v != "" {
 		if ratio, err := strconv.ParseFloat(v, 64); err == nil {
 			c.TemporalGroupingOverlapRatio = ratio
+		}
+	}
+
+	// Location-Temporal Clustering configuration
+	if v := os.Getenv("JEEVES_USE_LOCATION_TEMPORAL_CLUSTERING"); v != "" {
+		if enabled, err := strconv.ParseBool(v); err == nil {
+			c.UseLocationTemporalClustering = enabled
 		}
 	}
 

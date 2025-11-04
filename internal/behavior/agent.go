@@ -156,12 +156,13 @@ func (a *Agent) initializePatternDiscovery() error {
 
 	// Initialize pattern discovery agent
 	discoveryConfig := patterns.DiscoveryConfig{
-		MinAnchors:                  a.cfg.PatternMinAnchorsForDiscovery,
-		LookbackHours:               a.cfg.PatternLookbackHours,
-		Interval:                    time.Duration(a.cfg.PatternDiscoveryIntervalHours) * time.Hour,
-		TemporalGroupingEnabled:     a.cfg.TemporalGroupingEnabled,
-		TemporalGroupingWindow:      time.Duration(a.cfg.TemporalGroupingWindowMinutes) * time.Minute,
-		TemporalGroupingOverlapRatio: a.cfg.TemporalGroupingOverlapRatio,
+		MinAnchors:                    a.cfg.PatternMinAnchorsForDiscovery,
+		LookbackHours:                 a.cfg.PatternLookbackHours,
+		Interval:                      time.Duration(a.cfg.PatternDiscoveryIntervalHours) * time.Hour,
+		TemporalGroupingEnabled:       a.cfg.TemporalGroupingEnabled,
+		TemporalGroupingWindow:        time.Duration(a.cfg.TemporalGroupingWindowMinutes) * time.Minute,
+		TemporalGroupingOverlapRatio:  a.cfg.TemporalGroupingOverlapRatio,
+		UseLocationTemporalClustering: a.cfg.UseLocationTemporalClustering,
 	}
 	a.discoveryAgent = patterns.NewDiscoveryAgent(
 		discoveryConfig,

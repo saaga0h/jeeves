@@ -176,6 +176,8 @@ services:
       JEEVES_TEMPORAL_GROUPING_ENABLED: "false"
       JEEVES_TEMPORAL_GROUPING_WINDOW_MINUTES: 60
       JEEVES_TEMPORAL_GROUPING_OVERLAP_RATIO: 0.5
+      # Location-Temporal Clustering (NEW - replaces DBSCAN)
+      JEEVES_USE_LOCATION_TEMPORAL_CLUSTERING: "true"  # Enable location-aware temporal density clustering
       # Progressive Activity Embeddings (LLM-based with caching)
       JEEVES_PROGRESSIVE_ACTIVITY_EMBEDDINGS: "true"  # Enable for testing parallel activities
 
