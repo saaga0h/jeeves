@@ -1,6 +1,7 @@
 package patterns
 
 import (
+	"fmt"
 	"sort"
 	"time"
 
@@ -160,6 +161,8 @@ func (c *LocationTemporalClusterer) detectSequences(
 			IsCrossLocation: false,
 		}
 
+		// Track which session indices are part of this sequence
+		sessionIndices := []int{i}
 		usedSessions[i] = true
 		currentSession := startSession
 
@@ -192,42 +195,81 @@ func (c *LocationTemporalClusterer) detectSequences(
 			sequence.EndTime = nextSession.EndTime
 			sequence.IsCrossLocation = true
 			usedSessions[j] = true
+			sessionIndices = append(sessionIndices, j)
 			currentSession = nextSession
+		}
+
+		// Check for back-and-forth patterns (A→B→A→B)
+		// These indicate parallel/interleaved activities, not natural sequences
+		if sequence.IsCrossLocation && c.isBackAndForthPattern(sequence) {
+			// Don't add as sequence - mark all sessions in this sequence as unused
+			for _, idx := range sessionIndices {
+				usedSessions[idx] = false
+			}
+			continue
 		}
 
 		// Only keep sequences with minimum length
 		if len(sequence.Anchors) >= c.MinSequenceLength {
 			sequences = append(sequences, sequence)
 		} else {
-			// Too short, mark as unused so it becomes standalone session
-			for idx := range usedSessions {
-				found := false
-				for _, anchor := range sequence.Anchors {
-					for _, session := range sessions {
-						if idx == findSessionIndex(sessions, session) {
-							for _, sAnchor := range session.Anchors {
-								if sAnchor.ID == anchor.ID {
-									found = true
-									break
-								}
-							}
-						}
-						if found {
-							break
-						}
-					}
-					if found {
-						break
-					}
-				}
-				if found {
-					usedSessions[idx] = false
-				}
+			// Too short, mark all sessions in this sequence as unused
+			for _, idx := range sessionIndices {
+				usedSessions[idx] = false
 			}
 		}
 	}
 
 	return sequences
+}
+
+// isBackAndForthPattern detects if a sequence alternates between locations (A→B→A→B)
+// This indicates parallel/interleaved activities rather than a natural routine flow
+func (c *LocationTemporalClusterer) isBackAndForthPattern(sequence *ActivitySequence) bool {
+	if !sequence.IsCrossLocation || len(sequence.Anchors) < 3 {
+		return false
+	}
+
+	// Build location timeline from anchors (unique consecutive locations)
+	var locationTimeline []string
+	lastLocation := ""
+	for _, anchor := range sequence.Anchors {
+		if anchor.Location != lastLocation {
+			locationTimeline = append(locationTimeline, anchor.Location)
+			lastLocation = anchor.Location
+		}
+	}
+
+	// Count location transitions
+	transitions := len(locationTimeline) - 1
+
+	// DEBUG: Log the simplified timeline for debugging
+	fmt.Printf("DEBUG isBackAndForthPattern: sequence_id=%s, timeline=%v, transitions=%d\n",
+		sequence.ID, locationTimeline, transitions)
+
+	// If we have multiple transitions (2+), check if it's alternating
+	if transitions >= 2 {
+		// Count how many times each location appears in the timeline
+		locationCount := make(map[string]int)
+		for _, loc := range locationTimeline {
+			locationCount[loc]++
+		}
+
+		// DEBUG: Log counts
+		fmt.Printf("DEBUG isBackAndForthPattern: locationCount=%v\n", locationCount)
+
+		// Check if any location appears multiple times (indicating back-and-forth)
+		for loc, count := range locationCount {
+			if count >= 2 {
+				// This location was visited, left, and returned to
+				// This indicates back-and-forth pattern
+				fmt.Printf("DEBUG isBackAndForthPattern: DETECTED back-and-forth for %s (count=%d)\n", loc, count)
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // addStandaloneSessions adds sessions that weren't part of any sequence
@@ -279,13 +321,4 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
-}
-
-func findSessionIndex(sessions []*LocationSession, target *LocationSession) int {
-	for i, s := range sessions {
-		if s == target {
-			return i
-		}
-	}
-	return -1
 }
