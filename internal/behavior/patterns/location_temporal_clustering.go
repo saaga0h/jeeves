@@ -1,7 +1,7 @@
 package patterns
 
 import (
-	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -35,14 +35,16 @@ type LocationTemporalClusterer struct {
 	TemporalGapThreshold time.Duration // Gap indicating separate activity sessions (default: 30 min)
 	SequenceMaxGap       time.Duration // Max gap for cross-location sequences (default: 20 min)
 	MinSequenceLength    int           // Minimum anchors in a sequence (default: 2)
+	logger               *slog.Logger
 }
 
 // NewLocationTemporalClusterer creates a new clusterer with default settings
-func NewLocationTemporalClusterer() *LocationTemporalClusterer {
+func NewLocationTemporalClusterer(logger *slog.Logger) *LocationTemporalClusterer {
 	return &LocationTemporalClusterer{
 		TemporalGapThreshold: 30 * time.Minute,
 		SequenceMaxGap:       20 * time.Minute,
 		MinSequenceLength:    2,
+		logger:               logger,
 	}
 }
 
@@ -243,10 +245,6 @@ func (c *LocationTemporalClusterer) isBackAndForthPattern(sequence *ActivitySequ
 	// Count location transitions
 	transitions := len(locationTimeline) - 1
 
-	// DEBUG: Log the simplified timeline for debugging
-	fmt.Printf("DEBUG isBackAndForthPattern: sequence_id=%s, timeline=%v, transitions=%d\n",
-		sequence.ID, locationTimeline, transitions)
-
 	// If we have multiple transitions (2+), check if it's alternating
 	if transitions >= 2 {
 		// Count how many times each location appears in the timeline
@@ -255,15 +253,17 @@ func (c *LocationTemporalClusterer) isBackAndForthPattern(sequence *ActivitySequ
 			locationCount[loc]++
 		}
 
-		// DEBUG: Log counts
-		fmt.Printf("DEBUG isBackAndForthPattern: locationCount=%v\n", locationCount)
-
 		// Check if any location appears multiple times (indicating back-and-forth)
 		for loc, count := range locationCount {
 			if count >= 2 {
 				// This location was visited, left, and returned to
 				// This indicates back-and-forth pattern
-				fmt.Printf("DEBUG isBackAndForthPattern: DETECTED back-and-forth for %s (count=%d)\n", loc, count)
+				c.logger.Debug("Detected back-and-forth pattern",
+					"sequence_id", sequence.ID,
+					"location", loc,
+					"visits", count,
+					"timeline", locationTimeline,
+					"transitions", transitions)
 				return true
 			}
 		}

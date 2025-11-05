@@ -209,7 +209,6 @@ func (e *ClusteringEngine) loadDistanceMatrix(
 
 	// Compute all pairwise distances in-memory using structured distance
 	missingCount := 0
-	sampleCount := 0
 	for i := 0; i < len(anchorIDs); i++ {
 		for j := i + 1; j < len(anchorIDs); j++ {
 			anchor1, ok1 := anchorMap[anchorIDs[i]]
@@ -224,15 +223,6 @@ func (e *ClusteringEngine) loadDistanceMatrix(
 
 			// Compute structured distance in-memory
 			dist := structuredDist(anchor1.SemanticEmbedding, anchor2.SemanticEmbedding)
-
-			// DEBUG: Log sample distances between different locations
-			if sampleCount < 10 && anchor1.Location != anchor2.Location {
-				e.logger.Info("DEBUG: Cross-location distance",
-					"loc1", anchor1.Location,
-					"loc2", anchor2.Location,
-					"distance", dist)
-				sampleCount++
-			}
 
 			key := distanceKey(anchorIDs[i], anchorIDs[j])
 			distances[key] = dist

@@ -57,11 +57,6 @@ func GenerateActivityFingerprint(
 	// Extract and normalize signal types (sorted for consistency)
 	signalTypes := extractSignalTypes(signals)
 
-	// DEBUG: Log what we're receiving to debug empty fingerprints
-	// TODO: Remove this debug logging once issue is resolved
-	fmt.Printf("DEBUG GenerateActivityFingerprint: location=%q, timestamp=%v, timePeriod=%q, dayType=%q, signals=%d, signalTypes=%v\n",
-		location, timestamp, timePeriod, dayType, len(signals), signalTypes)
-
 	return ActivityFingerprint{
 		Location:   location,
 		TimePeriod: timePeriod,

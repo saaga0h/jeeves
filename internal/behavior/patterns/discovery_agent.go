@@ -646,7 +646,7 @@ func (a *DiscoveryAgent) discoverPatternsWithLocationTemporal(
 		"min_anchors", minAnchors)
 
 	// STEP 1: Location-temporal clustering
-	clusterer := NewLocationTemporalClusterer()
+	clusterer := NewLocationTemporalClusterer(a.logger)
 	sequences := clusterer.ClusterByLocationTemporal(anchors)
 
 	a.logger.Info("Location-temporal clustering complete",
