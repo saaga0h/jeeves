@@ -462,8 +462,8 @@ func TestComputeVectorDistance(t *testing.T) {
 func TestShouldSampleForLearning_UniquePattern(t *testing.T) {
 	timeManager := &TestTimeManager{}
 	agent := &ComputationAgent{
-		timeManager:         timeManager,
-		patternObservations: make(map[string][]float64),
+		timeManager:  timeManager,
+		patternCache: make(map[string]*LearnedPattern),
 	}
 
 	anchor1 := createTestAnchorWithContext("bedroom", time.Now(), map[string]interface{}{
@@ -486,8 +486,8 @@ func TestShouldSampleForLearning_UniquePattern(t *testing.T) {
 func TestShouldSampleForLearning_AlreadySampled(t *testing.T) {
 	timeManager := &TestTimeManager{}
 	agent := &ComputationAgent{
-		timeManager:         timeManager,
-		patternObservations: make(map[string][]float64),
+		timeManager:  timeManager,
+		patternCache: make(map[string]*LearnedPattern),
 	}
 
 	anchor1 := createTestAnchorWithContext("bedroom", time.Now(), map[string]interface{}{
@@ -499,9 +499,9 @@ func TestShouldSampleForLearning_AlreadySampled(t *testing.T) {
 		"day_type":    "weekday",
 	})
 
-	// Mark pattern as already sampled
+	// Mark pattern as already sampled by adding to cache
 	key := generatePatternKey(anchor1, anchor2)
-	agent.patternObservations[key] = []float64{0.15}
+	agent.patternCache[key] = &LearnedPattern{PatternKey: key}
 
 	// Second time seeing this pattern
 	shouldSample := agent.shouldSampleForLearning(anchor1, anchor2)
@@ -511,38 +511,14 @@ func TestShouldSampleForLearning_AlreadySampled(t *testing.T) {
 	}
 }
 
-func TestGetLearnedDistanceWithConfidence_NoObservations(t *testing.T) {
+// Legacy tests removed - getLearnedDistanceWithConfidence() method has been replaced
+// with the new temporal decay system. See learned_patterns_test.go for new pattern tests.
+
+func TestPatternCacheLookup_NoPattern(t *testing.T) {
 	timeManager := &TestTimeManager{}
 	agent := &ComputationAgent{
-		timeManager:         timeManager,
-		patternObservations: make(map[string][]float64),
-	}
-
-	anchor1 := createTestAnchorWithContext("living_room", time.Now(), map[string]interface{}{
-		"time_of_day": "evening",
-		"day_type":    "weekday",
-	})
-	anchor2 := createTestAnchorWithContext("living_room", time.Now().Add(30*time.Minute), map[string]interface{}{
-		"time_of_day": "evening",
-		"day_type":    "weekday",
-	})
-
-	distance, confidence := agent.getLearnedDistanceWithConfidence(anchor1, anchor2)
-
-	if distance != nil {
-		t.Errorf("Expected nil distance for no observations, got %f", *distance)
-	}
-
-	if confidence != 0.0 {
-		t.Errorf("Expected confidence 0.0 for no observations, got %f", confidence)
-	}
-}
-
-func TestGetLearnedDistanceWithConfidence_SingleObservation(t *testing.T) {
-	timeManager := &TestTimeManager{}
-	agent := &ComputationAgent{
-		timeManager:         timeManager,
-		patternObservations: make(map[string][]float64),
+		timeManager:  timeManager,
+		patternCache: make(map[string]*LearnedPattern),
 	}
 
 	anchor1 := createTestAnchorWithContext("living_room", time.Now(), map[string]interface{}{
@@ -555,29 +531,18 @@ func TestGetLearnedDistanceWithConfidence_SingleObservation(t *testing.T) {
 	})
 
 	key := generatePatternKey(anchor1, anchor2)
-	agent.patternObservations[key] = []float64{0.25}
 
-	distance, confidence := agent.getLearnedDistanceWithConfidence(anchor1, anchor2)
-
-	if distance == nil {
-		t.Fatal("Expected distance, got nil")
-	}
-
-	if *distance != 0.25 {
-		t.Errorf("Expected distance 0.25, got %f", *distance)
-	}
-
-	// Single observation should have confidence 0.5
-	if confidence < 0.4 || confidence > 0.6 {
-		t.Errorf("Expected confidence around 0.5 for single observation, got %f", confidence)
+	// Verify no pattern in cache
+	if _, exists := agent.patternCache[key]; exists {
+		t.Error("Expected no pattern in empty cache")
 	}
 }
 
-func TestGetLearnedDistanceWithConfidence_MultipleConsistentObservations(t *testing.T) {
+func TestPatternCacheLookup_WithPattern(t *testing.T) {
 	timeManager := &TestTimeManager{}
 	agent := &ComputationAgent{
-		timeManager:         timeManager,
-		patternObservations: make(map[string][]float64),
+		timeManager:  timeManager,
+		patternCache: make(map[string]*LearnedPattern),
 	}
 
 	anchor1 := createTestAnchorWithContext("living_room", time.Now(), map[string]interface{}{
@@ -590,31 +555,34 @@ func TestGetLearnedDistanceWithConfidence_MultipleConsistentObservations(t *test
 	})
 
 	key := generatePatternKey(anchor1, anchor2)
-	// 3+ observations with low variance
-	agent.patternObservations[key] = []float64{0.24, 0.25, 0.26}
-
-	distance, confidence := agent.getLearnedDistanceWithConfidence(anchor1, anchor2)
-
-	if distance == nil {
-		t.Fatal("Expected distance, got nil")
+	// Add pattern to cache
+	agent.patternCache[key] = &LearnedPattern{
+		PatternKey:       key,
+		WeightedDistance: 0.25,
+		ConfidenceScore:  0.85,
 	}
 
-	// Should be average
-	if *distance < 0.24 || *distance > 0.26 {
-		t.Errorf("Expected distance around 0.25, got %f", *distance)
+	// Verify pattern can be retrieved
+	pattern, exists := agent.patternCache[key]
+	if !exists {
+		t.Fatal("Expected pattern in cache")
 	}
 
-	// 3+ observations with low variance should have high confidence (0.9 - small penalty)
-	if confidence < 0.8 {
-		t.Errorf("Expected high confidence (>0.8) for consistent observations, got %f", confidence)
+	if pattern.WeightedDistance != 0.25 {
+		t.Errorf("Expected distance 0.25, got %f", pattern.WeightedDistance)
+	}
+
+	if pattern.ConfidenceScore != 0.85 {
+		t.Errorf("Expected confidence 0.85, got %f", pattern.ConfidenceScore)
 	}
 }
 
-func TestGetLearnedDistanceWithConfidence_HighVariance(t *testing.T) {
+func TestPatternCacheLookup_TemporalDecay(t *testing.T) {
 	timeManager := &TestTimeManager{}
 	agent := &ComputationAgent{
-		timeManager:         timeManager,
-		patternObservations: make(map[string][]float64),
+		timeManager:          timeManager,
+		patternCache:         make(map[string]*LearnedPattern),
+		learnedPatternConfig: DefaultLearnedPatternConfig(),
 	}
 
 	anchor1 := createTestAnchorWithContext("living_room", time.Now(), map[string]interface{}{
@@ -627,92 +595,72 @@ func TestGetLearnedDistanceWithConfidence_HighVariance(t *testing.T) {
 	})
 
 	key := generatePatternKey(anchor1, anchor2)
-	// High variance observations
-	agent.patternObservations[key] = []float64{0.1, 0.5, 0.9}
 
-	_, confidence := agent.getLearnedDistanceWithConfidence(anchor1, anchor2)
+	// This test verifies that pattern cache exists and can store patterns
+	// Temporal decay calculations are tested in learned_patterns_test.go
+	agent.patternCache[key] = &LearnedPattern{
+		PatternKey:       key,
+		WeightedDistance: 0.25,
+		ConfidenceScore:  0.90,
+	}
 
-	// High variance should reduce confidence significantly
-	if confidence > 0.7 {
-		t.Errorf("Expected lower confidence (<0.7) for high variance, got %f", confidence)
+	pattern, exists := agent.patternCache[key]
+	if !exists {
+		t.Fatal("Expected pattern to exist in cache")
+	}
+
+	if pattern.WeightedDistance != 0.25 {
+		t.Errorf("Expected distance 0.25, got %f", pattern.WeightedDistance)
+	}
+
+	if pattern.ConfidenceScore != 0.90 {
+		t.Errorf("Expected confidence 0.90, got %f", pattern.ConfidenceScore)
 	}
 }
 
-// Test Uncertain Queue Management
-
-func TestQueueForVerification(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+// Legacy test removed - replaced with new temporal decay system
+func TestPatternCache_MultiplePatterns(t *testing.T) {
 	timeManager := &TestTimeManager{}
 	agent := &ComputationAgent{
-		timeManager:    timeManager,
-		logger:         logger,
-		uncertainQueue: make([][2]*types.SemanticAnchor, 0),
+		timeManager:  timeManager,
+		patternCache: make(map[string]*LearnedPattern),
 	}
 
-	anchor1 := createTestAnchorWithContext("study", time.Now(), map[string]interface{}{
-		"time_of_day": "evening",
-		"day_type":    "weekday",
-	})
-	anchor2 := createTestAnchorWithContext("study", time.Now().Add(2*time.Hour), map[string]interface{}{
-		"time_of_day": "night",
-		"day_type":    "weekday",
-	})
+	key1 := "pattern1"
+	key2 := "pattern2"
 
-	agent.queueForVerification(anchor1, anchor2)
-
-	if len(agent.uncertainQueue) != 1 {
-		t.Errorf("Expected queue size 1, got %d", len(agent.uncertainQueue))
-	}
-}
-
-func TestQueueForVerification_NoDuplicates(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
-	timeManager := &TestTimeManager{}
-	agent := &ComputationAgent{
-		timeManager:    timeManager,
-		logger:         logger,
-		uncertainQueue: make([][2]*types.SemanticAnchor, 0),
+	agent.patternCache[key1] = &LearnedPattern{
+		PatternKey:       key1,
+		WeightedDistance: 0.2,
+		ConfidenceScore:  0.9,
 	}
 
-	anchor1 := createTestAnchorWithContext("study", time.Now(), map[string]interface{}{
-		"time_of_day": "evening",
-		"day_type":    "weekday",
-	})
-	anchor2 := createTestAnchorWithContext("study", time.Now().Add(2*time.Hour), map[string]interface{}{
-		"time_of_day": "night",
-		"day_type":    "weekday",
-	})
+	agent.patternCache[key2] = &LearnedPattern{
+		PatternKey:       key2,
+		WeightedDistance: 0.4,
+		ConfidenceScore:  0.8,
+	}
 
-	agent.queueForVerification(anchor1, anchor2)
-	agent.queueForVerification(anchor1, anchor2) // Try to add again
+	// Verify both patterns are stored
+	if len(agent.patternCache) != 2 {
+		t.Errorf("Expected 2 patterns in cache, got %d", len(agent.patternCache))
+	}
 
-	if len(agent.uncertainQueue) != 1 {
-		t.Errorf("Expected queue size 1 (no duplicates), got %d", len(agent.uncertainQueue))
+	pattern1, exists1 := agent.patternCache[key1]
+	pattern2, exists2 := agent.patternCache[key2]
+
+	if !exists1 || !exists2 {
+		t.Fatal("Expected both patterns to exist in cache")
+	}
+
+	if pattern1.WeightedDistance != 0.2 {
+		t.Errorf("Pattern 1: Expected distance 0.2, got %f", pattern1.WeightedDistance)
+	}
+
+	if pattern2.WeightedDistance != 0.4 {
+		t.Errorf("Pattern 2: Expected distance 0.4, got %f", pattern2.WeightedDistance)
 	}
 }
 
-func TestRemoveFromUncertainQueue(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
-	timeManager := &TestTimeManager{}
-	agent := &ComputationAgent{
-		timeManager:    timeManager,
-		logger:         logger,
-		uncertainQueue: make([][2]*types.SemanticAnchor, 0),
-	}
-
-	anchor1 := createTestAnchorWithContext("study", time.Now(), map[string]interface{}{
-		"time_of_day": "evening",
-		"day_type":    "weekday",
-	})
-	anchor2 := createTestAnchorWithContext("study", time.Now().Add(2*time.Hour), map[string]interface{}{
-		"time_of_day": "night",
-		"day_type":    "weekday",
-	})
-
-	agent.queueForVerification(anchor1, anchor2)
-	agent.removeFromUncertainQueue(anchor1, anchor2)
-
-	if len(agent.uncertainQueue) != 0 {
-		t.Errorf("Expected queue size 0 after removal, got %d", len(agent.uncertainQueue))
-	}
-}
+// Legacy uncertain queue tests removed - queue management was removed along with
+// learned_first, vector_first, and hybrid strategies.

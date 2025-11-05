@@ -75,7 +75,7 @@ type Config struct {
 
 	// Pattern Discovery configuration
 	PatternDiscoveryEnabled        bool
-	PatternDistanceStrategy        string // "llm_first", "learned_first", "vector_first"
+	PatternDistanceStrategy        string // "llm_first", "progressive_learned"
 	PatternDiscoveryIntervalHours  int
 	PatternDiscoveryBatchSize      int
 	PatternClusteringEpsilon       float64
@@ -152,7 +152,7 @@ func NewConfig() *Config {
 		ConsolidationMaxGapMinutes: 120,
 		// Pattern Discovery defaults
 		PatternDiscoveryEnabled:       false,
-		PatternDistanceStrategy:       "vector_first",
+		PatternDistanceStrategy:       "progressive_learned",
 		PatternDiscoveryIntervalHours: 6,
 		PatternDiscoveryBatchSize:     100,
 		PatternClusteringEpsilon:      0.3,
@@ -532,7 +532,7 @@ func (c *Config) LoadFromFlags() {
 
 	// Pattern Discovery flags
 	pflag.BoolVar(&c.PatternDiscoveryEnabled, "pattern-discovery-enabled", c.PatternDiscoveryEnabled, "Enable pattern discovery")
-	pflag.StringVar(&c.PatternDistanceStrategy, "pattern-distance-strategy", c.PatternDistanceStrategy, "Distance computation strategy (llm_first, learned_first, vector_first)")
+	pflag.StringVar(&c.PatternDistanceStrategy, "pattern-distance-strategy", c.PatternDistanceStrategy, "Distance computation strategy (llm_first, progressive_learned)")
 	pflag.IntVar(&c.PatternDiscoveryIntervalHours, "pattern-discovery-interval-hours", c.PatternDiscoveryIntervalHours, "Pattern discovery interval in hours")
 	pflag.IntVar(&c.PatternDiscoveryBatchSize, "pattern-discovery-batch-size", c.PatternDiscoveryBatchSize, "Pattern discovery batch size")
 	pflag.Float64Var(&c.PatternClusteringEpsilon, "pattern-clustering-epsilon", c.PatternClusteringEpsilon, "DBSCAN epsilon (maximum distance for neighborhood)")
