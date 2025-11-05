@@ -1,3 +1,64 @@
+// Package distance implements semantic distance computation between behavioral anchors.
+//
+// # Distance Computation Strategies
+//
+// This package supports multiple strategies for computing semantic distances between anchor pairs.
+// Each strategy represents a different trade-off between accuracy, computational cost, and learning capability.
+//
+// ## Available Strategies
+//
+// 1. llm_first (Benchmark/Reference)
+//    - Purpose: Development benchmark for best possible semantic understanding
+//    - Method: Always uses LLM to compute distances with full semantic reasoning
+//    - Use case: Testing, establishing quality baselines, building learned pattern library
+//    - Cost: High (every computation requires LLM call)
+//    - Accuracy: Highest - LLM provides nuanced semantic understanding
+//    - Notes: Not for production due to computational expense; kept as reference implementation
+//
+// 2. progressive_learned (Production - Current)
+//    - Purpose: Production strategy balancing accuracy and cost through progressive learning
+//    - Method: Strategic LLM sampling to build learned patterns, reuses patterns when confident
+//    - Use case: Real-world deployments, learning from user behavior over time
+//    - Cost: Medium initially, decreases as patterns are learned
+//    - Accuracy: High - approaches llm_first quality as learning progresses
+//    - Notes: Current production strategy; adapts to specific household patterns
+//
+// 3. vector_first (Fast Path)
+//    - Purpose: Fastest possible distance computation using only embeddings
+//    - Method: Always uses structured vector distance (no LLM calls)
+//    - Use case: High-throughput scenarios, initial prototyping
+//    - Cost: Low (pure mathematical computation)
+//    - Accuracy: Moderate - misses semantic nuances that LLM would catch
+//    - Notes: Useful when speed is critical and approximate distances are acceptable
+//
+// 4. learned_first (Legacy)
+//    - Purpose: Original production strategy (deprecated)
+//    - Method: Check learned distance cache, fallback to LLM, then vector
+//    - Use case: Legacy compatibility
+//    - Cost: Variable
+//    - Accuracy: Variable depending on cache hits
+//    - Notes: Superseded by progressive_learned; kept for backward compatibility
+//
+// 5. hybrid (Experimental)
+//    - Purpose: Selective LLM usage based on heuristics
+//    - Method: Uses vector for clear cases, LLM for borderline/ambiguous pairs
+//    - Use case: Experimental optimization of LLM usage
+//    - Cost: Medium (fewer LLM calls than llm_first)
+//    - Accuracy: High for clear cases, depends on heuristic quality
+//    - Notes: Experimental; may miss edge cases where heuristics fail
+//
+// ## Strategy Selection Guide
+//
+// - Development/Testing: Use "llm_first" to establish quality baseline
+// - Production: Use "progressive_learned" for adaptive learning
+// - High-throughput/Cost-sensitive: Use "vector_first" for speed
+// - Hardware-constrained: Start with "vector_first", migrate to "progressive_learned" as hardware improves
+//
+// ## Configuration
+//
+// Set strategy via environment variable:
+//   JEEVES_PATTERN_DISTANCE_STRATEGY=progressive_learned
+//
 package distance
 
 import (
@@ -269,7 +330,8 @@ func (a *ComputationAgent) computeDistances(ctx context.Context, lookbackHours i
 	return nil
 }
 
-// computeDistance calculates semantic distance using configured strategy
+// computeDistance calculates semantic distance using configured strategy.
+// See package documentation for detailed strategy descriptions.
 func (a *ComputationAgent) computeDistance(
 	ctx context.Context,
 	anchor1, anchor2 *types.SemanticAnchor,
@@ -277,11 +339,13 @@ func (a *ComputationAgent) computeDistance(
 
 	switch a.config.Strategy {
 	case "llm_first":
-		// Tests: Always use LLM to build learned library
+		// Benchmark/Reference: Always use LLM for best possible semantic understanding
+		// See package docs for strategy details
 		return a.computeLLMDistance(ctx, anchor1, anchor2)
 
 	case "learned_first":
-		// Production: Check learned patterns first
+		// Legacy: Check learned distance cache, fallback to LLM, then vector
+		// Superseded by progressive_learned; kept for backward compatibility
 		if dist := a.getLearnedDistance(anchor1, anchor2); dist != nil {
 			return *dist, "learned", nil
 		}
@@ -297,15 +361,18 @@ func (a *ComputationAgent) computeDistance(
 		return a.computeVectorDistance(anchor1, anchor2)
 
 	case "vector_first":
-		// Fast path: always use vector distance
+		// Fast Path: Pure mathematical computation, no LLM calls
+		// See package docs for strategy details
 		return a.computeVectorDistance(anchor1, anchor2)
 
 	case "hybrid":
-		// Hybrid: Use vector for most cases, LLM for ambiguous ones
+		// Experimental: Selective LLM usage based on heuristics
+		// See package docs for strategy details
 		return a.computeHybridDistance(ctx, anchor1, anchor2)
 
 	case "progressive_learned":
-		// Progressive: Build learned model through strategic LLM sampling
+		// Production (Current): Strategic LLM sampling with progressive learning
+		// See package docs for strategy details
 		return a.computeProgressiveLearnedDistance(ctx, anchor1, anchor2)
 
 	default:
