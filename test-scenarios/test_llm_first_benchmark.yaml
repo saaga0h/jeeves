@@ -1,0 +1,206 @@
+name: "LLM-First Benchmark - Quality Baseline"
+description: "Benchmark test using llm_first strategy to establish quality baseline for semantic distance computation. Tests that LLM-based distance computation is functional and produces high-quality results."
+
+test_mode:
+  virtual_start: "2025-10-30T19:00:00Z"
+  time_scale: 10  # 10x time scale for faster testing
+
+setup:
+  location: "universe"
+  initial_state:
+    pattern_discovery_enabled: true
+    pattern_distance_strategy: "llm_first"  # BENCHMARK STRATEGY
+    pattern_distance_batch_size: 100
+    batch_processing_enabled: false
+    batch_duration: "168h"
+    batch_overlap: "1h"
+
+events:
+  # ===============================================
+  # SCENARIO: Evening TV watching in living room
+  # ===============================================
+
+  # === Enter living room (19:00) ===
+  - time: 0
+    sensor: "motion:living_room"
+    value: true
+    description: "Enter living room"
+
+  - time: 30
+    type: lighting
+    location: living_room
+    description: "Turn on living room light"
+    data:
+      state: "on"
+      brightness: 80
+      source: "manual"
+      timestamp: "2025-10-30T19:00:30Z"
+
+  # === Watch TV (19:01-20:00) ===
+  - time: 60
+    sensor: "motion:living_room"
+    value: true
+    description: "Settle in for TV"
+
+  - time: 600
+    sensor: "motion:living_room"
+    value: true
+    description: "Still watching"
+
+  - time: 1200
+    sensor: "motion:living_room"
+    value: true
+    description: "Continue watching"
+
+  - time: 1800
+    sensor: "motion:living_room"
+    value: true
+    description: "Still watching"
+
+  - time: 2400
+    sensor: "motion:living_room"
+    value: true
+    description: "Continue watching"
+
+  - time: 3000
+    sensor: "motion:living_room"
+    value: true
+    description: "Still watching"
+
+  - time: 3600
+    sensor: "motion:living_room"
+    value: true
+    description: "Finish watching TV"
+
+  # === Leave living room (20:00) ===
+  - time: 3630
+    type: lighting
+    location: living_room
+    description: "Turn off living room light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T20:00:30Z"
+
+  # ===============================================
+  # SCENARIO 2: Late evening study session
+  # ===============================================
+
+  # === Enter study (20:30) ===
+  - time: 5400
+    sensor: "motion:study"
+    value: true
+    description: "Enter study"
+
+  - time: 5430
+    type: lighting
+    location: study
+    description: "Turn on study light"
+    data:
+      state: "on"
+      brightness: 100
+      source: "manual"
+      timestamp: "2025-10-30T20:30:30Z"
+
+  # === Work in study (20:31-22:00) ===
+  - time: 5460
+    sensor: "motion:study"
+    value: true
+    description: "Start working"
+
+  - time: 6000
+    sensor: "motion:study"
+    value: true
+    description: "Working"
+
+  - time: 6600
+    sensor: "motion:study"
+    value: true
+    description: "Continue working"
+
+  - time: 7200
+    sensor: "motion:study"
+    value: true
+    description: "Still working"
+
+  - time: 7800
+    sensor: "motion:study"
+    value: true
+    description: "Working"
+
+  - time: 8400
+    sensor: "motion:study"
+    value: true
+    description: "Finish work"
+
+  # === Leave study (22:00) ===
+  - time: 8430
+    type: lighting
+    location: study
+    description: "Turn off study light"
+    data:
+      state: "off"
+      source: "manual"
+      timestamp: "2025-10-30T22:00:30Z"
+
+  # === Consolidation ===
+  - time: 8700
+    type: behavior
+    location: universe
+    description: "Consolidate all anchors"
+    data:
+      action: "consolidate"
+      lookback_hours: 6
+
+  # === Pattern Discovery ===
+  - time: 8760
+    type: behavior
+    location: universe
+    description: "Discover patterns using LLM-first strategy"
+    data:
+      action: "discover_patterns"
+      min_anchors: 3
+      lookback_hours: 168
+
+wait:
+  - time: 9300
+    description: "Wait for pattern discovery to complete"
+
+expectations:
+  postgres:
+    # LLM-first: All distances should use LLM
+    - time: 9300
+      postgres_query: |
+        SELECT COUNT(*) FILTER (WHERE source IN ('llm', 'llm_seed'))
+        FROM anchor_distances
+      postgres_expected: ">=10"
+      description: "LLM-first: Most distances should use LLM"
+
+    # LLM-first should produce high-quality distances
+    - time: 9300
+      postgres_query: |
+        SELECT COUNT(*) FILTER (WHERE source = 'vector')
+        FROM anchor_distances
+      postgres_expected: "0"
+      description: "LLM-first: No fallback to vector distances"
+
+    # Pattern discovery should work
+    - time: 9300
+      postgres_query: |
+        SELECT COUNT(*) FROM behavioral_patterns
+      postgres_expected: ">=2"
+      description: "LLM-first: Patterns should be discovered"
+
+    # Anchors should be properly stored
+    - time: 9300
+      postgres_query: |
+        SELECT COUNT(*) FROM semantic_anchors
+      postgres_expected: ">=10"
+      description: "LLM-first: Sufficient anchors created"
+
+    # Distance computation completeness
+    - time: 9300
+      postgres_query: |
+        SELECT COUNT(DISTINCT source) FROM anchor_distances
+      postgres_expected: ">=1"
+      description: "LLM-first: Distance sources used"
